@@ -85,7 +85,7 @@ type AccountPool struct {
 
 	intervalClampLogged string // 已告警过的 quota_refresh_interval 原始值（mu 保护：钳制告警去重，不刷屏）
 
-	refreshFn func(a *Account) error // 由 ZCodeAPI 注入的额度刷新函数
+	refreshFn func(ctx context.Context, a *Account) error // 由 ZCodeAPI 注入的额度刷新函数（ctx 随停机取消，防 db.Close 后写库）
 	stopCh    chan struct{}
 	stopOnce  sync.Once
 	loopDone  chan struct{} // refreshLoop 退出标记（Stop 有界等待）
@@ -139,7 +139,7 @@ func NewAccountPool(db *DB, cfg *FileConfig, appVersion string) *AccountPool {
 }
 
 // SetQuotaFetcher 注入额度刷新实现（解耦 ZCodeAPI 循环依赖）
-func (p *AccountPool) SetQuotaFetcher(fn func(a *Account) error) {
+func (p *AccountPool) SetQuotaFetcher(fn func(ctx context.Context, a *Account) error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.refreshFn = fn
@@ -240,6 +240,17 @@ func (p *AccountPool) refreshAll() {
 	if fn == nil {
 		return
 	}
+	// 取卡链路的 HTTP 随停机取消：Stop 关停后 25s 客户端超时的在途刷新不再
+	// 等满全程，杜绝 goroutine 活到 db.Close 之后写库丢状态（评审 2026-10-26 F1）
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-p.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	accounts, err := p.db.ListAccounts("")
 	if err != nil {
 		log.Printf("[pool] list accounts: %v", err)
@@ -290,8 +301,10 @@ func (p *AccountPool) refreshAll() {
 				return
 			default:
 			}
-			if err := fn(acc); err != nil {
-				log.Printf("[pool] refresh quota %s: %v", acc.Email, err)
+			if err := fn(ctx, acc); err != nil {
+				if ctx.Err() == nil {
+					log.Printf("[pool] refresh quota %s: %v", acc.Email, err)
+				}
 			}
 		}(a)
 	}
@@ -306,7 +319,7 @@ func (p *AccountPool) RefreshOne(a *Account) error {
 	if fn == nil {
 		return nil
 	}
-	return fn(a)
+	return fn(context.Background(), a)
 }
 
 // ---- 可选性判定（models.py is_selectable 移植）----

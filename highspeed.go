@@ -295,6 +295,12 @@ func (z *ZCodeAPI) highspeedCardFor(ctx context.Context, a *Account, model strin
 				block = time.Hour
 			}
 		}
+		// 客户端断开导致的取卡中断不是取卡失败：不设静默期（否则用户取消一个
+		// 请求会把该账号的高速卡 lane 压暗 10 分钟——与 takeFailed 的 ctx 豁免
+		// 同规，评审 2026-10-26 L5）
+		if ctx.Err() != nil {
+			return nil, false
+		}
 		z.hsDrawBlockUntil[a.ID] = now.Add(block)
 		log.Printf("[highspeed] account %s draw failed, lane fallback %s: %v",
 			a.DisplayNameOrEmail(), block.Truncate(time.Second), err)
@@ -449,6 +455,8 @@ func (z *ZCodeAPI) highspeedForward(w http.ResponseWriter, r *http.Request, a *A
 	for k, v := range h {
 		req.Header.Set(k, v)
 	}
+	// 客户端白名单头透传（卡号除外——服务端权威，见 relay.go laneForwardSet）
+	forwardLaneClientHeaders(r, req.Header)
 	client := ClientForURL(z.egress.ProxyURLForAccount(a), highspeedMessagesURL, 0)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -512,6 +520,10 @@ func (z *ZCodeAPI) highspeedForward(w http.ResponseWriter, r *http.Request, a *A
 
 	z.pool.MarkUsed(a)
 	if rc.clientStream {
+		// 上游 request-id 透传给客户端（与 relay 透传路径同规，遥测对账用）
+		if rid := resp.Header.Get("x-request-id"); rid != "" {
+			w.Header().Set("x-request-id", rid)
+		}
 		sniff := newUsageSniffReader(resp.Body)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -527,7 +539,7 @@ func (z *ZCodeAPI) highspeedForward(w http.ResponseWriter, r *http.Request, a *A
 					ttft = int(time.Since(start).Milliseconds())
 				}
 				if _, werr := w.Write(buf[:n]); werr != nil {
-					z.recordUsage(a, r, payload, resp.StatusCode, start, ttft, sniff.usage(), true)
+					z.recordUsage(a, r, payload, clientGoneStatus(r), start, ttft, sniff.usage(), true)
 					return true
 				}
 				flushWriter(w)
@@ -546,6 +558,12 @@ func (z *ZCodeAPI) highspeedForward(w http.ResponseWriter, r *http.Request, a *A
 				msg = strings.TrimPrefix(sniffed.StopReason, "ERR:")
 			}
 			writeSSEErrorEvent(w, msg)
+			recStatus = http.StatusBadGateway
+		}
+		// 空流守卫（评审 M2，与闲时透传同不变量）：零事件或零内容块的 2xx SSE
+		// 不得透传成干净成功
+		if !truncated && !inlineErr && !sniff.sawContentBlock {
+			writeSSEErrorEvent(w, "upstream returned an empty response (no content blocks)")
 			recStatus = http.StatusBadGateway
 		}
 		z.recordUsage(a, r, payload, recStatus, start, ttft, sniffed, true)
@@ -568,6 +586,9 @@ func (z *ZCodeAPI) highspeedForward(w http.ResponseWriter, r *http.Request, a *A
 		return true
 	}
 	z.recordUsage(a, r, payload, resp.StatusCode, start, 0, usage, false)
+	if rid := resp.Header.Get("x-request-id"); rid != "" {
+		w.Header().Set("x-request-id", rid)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)

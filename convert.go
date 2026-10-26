@@ -446,6 +446,15 @@ func clientGone(r *http.Request) bool {
 	return r != nil && errors.Is(r.Context().Err(), context.Canceled)
 }
 
+// clientGoneStatus 中途写失败时的落库状态：客户端断开按 499（同 clientGone
+// 语义，闲时/高速卡透传路径共用），其余按 502
+func clientGoneStatus(r *http.Request) int {
+	if clientGone(r) {
+		return 499
+	}
+	return http.StatusBadGateway
+}
+
 // ssePingInterval 上游静默多久后向客户端注入一个协议合法的 ping 帧。
 // zai-org/ZCode 按 chunk 间隔计流空闲超时（超限 abort + 全量重试且每次重试加罚
 // 30s）；长思考/长工具调用间隙注入 ping 可避免误判。var 以便测试缩短间隔。
@@ -1291,7 +1300,10 @@ func (z *ZCodeAPI) streamResponses(w http.ResponseWriter, flusher http.Flusher, 
 			ttft = int(time.Since(start).Milliseconds())
 		}
 		switch ev.Event {
-		case "message_start", "message_delta", "error":
+		case "message_start", "message_delta", "message_stop", "error":
+			// message_stop 必须进本臂置 sawStop——放在只收 start/delta/error 的
+			// 臂里它是死代码，start→stop 空内容流会被洗成 response.completed
+			//（姊妹路径 streamOpenAI/streamCompletions 无此缺陷，评审 M1）
 			if ev.Event == "message_start" {
 				sawStart = true
 			}

@@ -817,6 +817,8 @@ func (z *ZCodeAPI) offPeakForward(w http.ResponseWriter, r *http.Request, a *Acc
 	req.Header.Set("X-ZCode-Agent", "glm")
 	req.Header.Set("X-Off-Peak-Ticket-ID", ticket.ID)
 	req.Header.Set("Accept", "text/event-stream")
+	// 客户端白名单头透传（票据号除外——服务端权威，见 relay.go laneForwardSet）
+	forwardLaneClientHeaders(r, req.Header)
 
 	client := ClientForURL(z.egress.ProxyURLForAccount(a), offPeakMessagesURL, 0)
 	resp, err := client.Do(req)
@@ -916,6 +918,10 @@ func (z *ZCodeAPI) offPeakForward(w http.ResponseWriter, r *http.Request, a *Acc
 	}
 
 	if opts.clientStream {
+		// 上游 request-id 透传给客户端（与 relay 透传路径同规，遥测对账用）
+		if rid := resp.Header.Get("x-request-id"); rid != "" {
+			w.Header().Set("x-request-id", rid)
+		}
 		sniff := newUsageSniffReader(resp.Body)
 		flushWriter(w)
 		buf := make([]byte, 32<<10)
@@ -928,7 +934,7 @@ func (z *ZCodeAPI) offPeakForward(w http.ResponseWriter, r *http.Request, a *Acc
 					ttft = int(time.Since(start).Milliseconds())
 				}
 				if _, werr := w.Write(buf[:n]); werr != nil {
-					z.recordUsage(a, r, opts.payload, resp.StatusCode, start, ttft, sniff.usage(), opts.clientStream)
+					z.recordUsage(a, r, opts.payload, clientGoneStatus(r), start, ttft, sniff.usage(), opts.clientStream)
 					return outcomeWritten
 				}
 				flushWriter(w)
@@ -953,6 +959,12 @@ func (z *ZCodeAPI) offPeakForward(w http.ResponseWriter, r *http.Request, a *Acc
 			writeSSEErrorEvent(w, msg)
 			recStatus = http.StatusBadGateway
 		}
+		// 空流守卫（评审 M2）：零事件或 start→stop 零内容块的 2xx SSE（上游
+		// 已实证的空响应怪癖）不得透传成干净成功——补错误帧 + 按 502 落库
+		if !truncated && !inlineErr && !sniff.sawContentBlock {
+			writeSSEErrorEvent(w, "upstream returned an empty response (no content blocks)")
+			recStatus = http.StatusBadGateway
+		}
 		z.recordUsage(a, r, opts.payload, recStatus, start, ttft, sniffed, opts.clientStream)
 		return outcomeWritten
 	}
@@ -973,6 +985,9 @@ func (z *ZCodeAPI) offPeakForward(w http.ResponseWriter, r *http.Request, a *Acc
 		return outcomeWritten
 	}
 	z.recordUsage(a, r, opts.payload, resp.StatusCode, start, 0, usage, false)
+	if rid := resp.Header.Get("x-request-id"); rid != "" {
+		w.Header().Set("x-request-id", rid)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)
@@ -1094,14 +1109,15 @@ func aggregateAnthropicStream(r io.Reader) ([]byte, *StreamUsage, error) {
 				// 兜底），空缓冲解不出东西，覆盖会把合法 input 冲成 {}
 				if raw := b.String(); raw != "" {
 					var parsed interface{}
-					if err := json.Unmarshal([]byte(raw), &parsed); err != nil || parsed == nil {
-						// 字面量 "null"（Unmarshal 成功但得 nil）：空对象容忍；
-						// 解析失败 = 参数中途断流（评审 F7）：置位，聚合末尾按失败处理
-						if parsed == nil {
-							parsed = map[string]interface{}{}
-						} else {
-							agg.toolTruncated = true
-						}
+					// interface{} 目标下 Unmarshal 失败时 parsed 必为 nil——置位
+					// 必须挂在 err 分支（挂在 parsed!=nil 上是死代码，截断参数
+					// 会被洗成 {} 空参成功，评审 2026-10-26 F2）
+					if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+						agg.toolTruncated = true
+						parsed = map[string]interface{}{}
+					} else if parsed == nil {
+						// 字面量 "null"（Unmarshal 成功但得 nil）：空对象容忍
+						parsed = map[string]interface{}{}
 					}
 					agg.blocks[idx]["input"] = parsed
 				}
@@ -1180,15 +1196,14 @@ func aggregateAnthropicStream(r io.Reader) ([]byte, *StreamUsage, error) {
 					continue
 				}
 				// 同 content_block_stop：空缓冲不覆盖 start 帧自带的合法 input；
-				// 解析失败 = 截断置位（评审 F7）
+				// 解析失败 = 截断置位（err 分支——见上方 F2 死代码注释）
 				if raw := b.String(); raw != "" {
 					var parsed interface{}
-					if err := json.Unmarshal([]byte(raw), &parsed); err != nil || parsed == nil {
-						if parsed == nil {
-							parsed = map[string]interface{}{}
-						} else {
-							agg.toolTruncated = true
-						}
+					if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+						agg.toolTruncated = true
+						parsed = map[string]interface{}{}
+					} else if parsed == nil {
+						parsed = map[string]interface{}{}
 					}
 					agg.blocks[idx]["input"] = parsed
 				}
@@ -1254,12 +1269,16 @@ func partialUsage(agg *anthropicAgg) *StreamUsage {
 
 // ---- SSE 透传期间的 usage 嗅探 ----
 
-// usageSniffReader 透传字节流的同时嗅探 Anthropic SSE usage 帧（message_start/message_delta）
+// usageSniffReader 透传字节流的同时嗅探 Anthropic SSE usage 帧（message_start/message_delta）。
+// sawMessageStart/sawContentBlock 供透传路径的空流判定（start→stop 零内容块或
+// 零事件流不得被当成干净成功——与 relay 透传守卫同一不变量，评审 M2）
 type usageSniffReader struct {
-	r      io.Reader
-	acc    StreamUsage
-	peeked string
-	done   bool
+	r               io.Reader
+	acc             StreamUsage
+	peeked          string
+	done            bool
+	sawMessageStart bool
+	sawContentBlock bool
 }
 
 func newUsageSniffReader(r io.Reader) *usageSniffReader { return &usageSniffReader{r: r} }
@@ -1336,6 +1355,7 @@ func (u *usageSniffReader) sniffLine(line string) {
 			u.acc.StopReason = "ERR:" + v.Error.Message
 		}
 	case "message_start":
+		u.sawMessageStart = true
 		if v.Message.Usage.InputTokens > u.acc.InputTokens {
 			u.acc.InputTokens = v.Message.Usage.InputTokens
 		}
@@ -1346,6 +1366,8 @@ func (u *usageSniffReader) sniffLine(line string) {
 		if v.Message.Usage.CacheCreationInputTokens > u.acc.CacheCreationTokens {
 			u.acc.CacheCreationTokens = v.Message.Usage.CacheCreationInputTokens
 		}
+	case "content_block_start":
+		u.sawContentBlock = true
 	case "message_delta":
 		if v.Usage.OutputTokens > 0 {
 			u.acc.OutputTokens = v.Usage.OutputTokens

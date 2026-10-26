@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -475,11 +476,29 @@ func (am *AuthManager) Middleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 
 		// 免认证路径：登录接口、健康检查、Web 页面、OAuth 环回回调。
-		// /web 必须整段匹配：裸前缀会把未来的 /webhooks 之类静默变成免认证路由
+		// /web 必须整段匹配：裸前缀会把未来的 /webhooks 之类静默变成免认证路由。
+		// /oauth 同理只精确放行 /oauth/callback（评审 2026-10-26 L1：裸前缀
+		// 会让未来挂到 /oauth/ 下的任何 handler 静默免认证）
 		if path == "/api/login" || path == "/health" ||
-			path == "/web" || strings.HasPrefix(path, "/web/") || strings.HasPrefix(path, "/oauth/") {
+			path == "/web" || strings.HasPrefix(path, "/web/") || path == "/oauth/callback" {
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// 同站 CSRF 闸（评审 2026-10-26 M1）：SameSite=Strict 不隔离同 host 的
+		// 不同端口（site 判定不含端口）——本机其他来源的页面可用 no-cors
+		// fetch/text/plain form 把管理会话 cookie 带到 /api/* 变更端点。
+		// 浏览器跨源请求必带 Origin；非浏览器客户端（curl/SDK）不带 → 不受影响。
+		// 仅校验"有 Origin 时必须同 host"，GET/HEAD 无副作用不设闸
+		if strings.HasPrefix(path, "/api/") && path != "/api/login" {
+			switch r.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+			default:
+				if origin := r.Header.Get("Origin"); origin != "" && !sameOriginHost(origin, r.Host) {
+					writeAPIError(w, http.StatusForbidden, "cross-origin request rejected")
+					return
+				}
+			}
 		}
 
 		// /v1/* 与 /async/*（闲时通道）使用 API Key 认证（Authorization: Bearer 或 x-api-key）。
@@ -541,6 +560,17 @@ func (am *AuthManager) Middleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sameOriginHost Origin 与请求 Host 是否同源（scheme 不比：反代终止 TLS 时
+// Origin 是 https 而 r.Host 无端口；端口必须一致——SameSite 的 site 判定
+// 不含端口，攻击面正是同 host 异端口）。Origin 为 null 或畸形 → 拒绝
+func sameOriginHost(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
 }
 
 // HandleLogin POST /api/login

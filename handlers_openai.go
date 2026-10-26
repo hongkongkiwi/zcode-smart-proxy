@@ -442,6 +442,23 @@ func openaiToAnthropic(body map[string]interface{}) (map[string]interface{}, err
 		}
 	}
 
+	// response_format（JSON mode）映射为上游 output_config.format（CLI 3.16.x
+	// 请求词汇：format:{type:"json_schema",schema}；fixThinking 保留该键）——
+	// 此前静默丢弃，JSON-mode 客户端拿到的输出不受任何结构约束
+	if rf, ok := body["response_format"].(map[string]interface{}); ok {
+		switch rt, _ := rf["type"].(string); rt {
+		case "json_schema":
+			if js, ok := rf["json_schema"].(map[string]interface{}); ok {
+				if schema, ok := js["schema"]; ok {
+					out["output_config"] = map[string]interface{}{"format": map[string]interface{}{"type": "json_schema", "schema": schema}}
+				}
+			}
+		case "json_object":
+			// 无 schema 的 JSON mode：以"任意对象"json_schema 近似（上游无裸 json_object 词汇）
+			out["output_config"] = map[string]interface{}{"format": map[string]interface{}{"type": "json_schema", "schema": map[string]interface{}{"type": "object"}}}
+		}
+	}
+
 	// tools 转换
 	if rawTools, ok := body["tools"].([]interface{}); ok {
 		var tools []map[string]interface{}

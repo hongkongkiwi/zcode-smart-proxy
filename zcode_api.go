@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,8 +121,8 @@ func NewZCodeAPI(cfg *FileConfig, db *DB, pool *AccountPool, captcha *CaptchaSer
 		hsDrawBlockUntil: make(map[int64]time.Time),
 		hsDrawing:        make(map[int64]bool),
 	}
-	pool.SetQuotaFetcher(func(a *Account) error {
-		err := z.RefreshAccountQuota(a)
+	pool.SetQuotaFetcher(func(ctx context.Context, a *Account) error {
+		err := z.RefreshAccountQuotaCtx(ctx, a)
 		if errors.Is(err, errRefreshInFlight) {
 			// 并发刷新已被别的副本赢下：本周期跳过，不算失败也不烧重置同步
 			return nil
@@ -140,11 +143,16 @@ var errRefreshInFlight = errors.New("quota refresh already in flight")
 // RefreshAccountQuota 拉取额度 → 应用状态迁移 → 落库。
 // 进程内单飞：并发触发（relay 成功后节流刷新 + 池子周期刷新）同一账号只拉一次。
 func (z *ZCodeAPI) RefreshAccountQuota(a *Account) error {
+	return z.RefreshAccountQuotaCtx(context.Background(), a)
+}
+
+// RefreshAccountQuotaCtx 同上，ctx 随池子停机取消（在途 HTTP 不等满超时）
+func (z *ZCodeAPI) RefreshAccountQuotaCtx(ctx context.Context, a *Account) error {
 	if _, busy := z.quotaRefreshInflight.LoadOrStore(a.ID, struct{}{}); busy {
 		return errRefreshInFlight
 	}
 	defer z.quotaRefreshInflight.Delete(a.ID)
-	ov, err := z.FetchQuotaRaw(a)
+	ov, err := z.FetchQuotaRawCtx(ctx, a)
 	if err != nil {
 		return err
 	}
@@ -411,12 +419,103 @@ func estimateBlockTokens(b map[string]json.RawMessage, raw json.RawMessage) int 
 		return estimateTextTokens(string(b["input"]))
 	case "tool_result":
 		return estimateContentTokens(b["content"])
-	case "image", "document":
+	case "image":
+		// base64 图按真实像素尺寸计（大图 1500 底数会低估一个量级，违背
+		// "宁高勿低"契约——4K 截图实际 ~11k tokens）；URL 引用/解不出尺寸
+		// 回落固定估值
+		if n, ok := estimateImageBlockTokens(b); ok {
+			return n
+		}
+		return estImageTokens
+	case "document":
 		return estImageTokens
 	default:
 		// 未知块类型：整块原始长度折半兜底，不 panic
 		return estimateTextTokens(string(raw)) / 2
 	}
+}
+
+// estimateImageBlockTokens 从 base64 图块嗅探像素尺寸并按 Anthropic 计价公式
+// （长边压到 ≤1568 后 (w*h)/750）估 token。URL 引用或解不出尺寸返回 false。
+func estimateImageBlockTokens(b map[string]json.RawMessage) (int, bool) {
+	var src struct {
+		Type string `json:"type"`
+		Data string `json:"data"`
+	}
+	if json.Unmarshal(b["source"], &src) != nil || src.Type != "base64" || src.Data == "" {
+		return 0, false
+	}
+	// 只解码头部：PNG 需 24 字节；JPEG SOF 段最坏在 ~64KB 内（进度式 JPEG 段表
+	// 前置），64KB base64 ≈ 88k 字符——按需截断解码，不给估算端点加全量解码成本
+	enc := src.Data
+	if len(enc) > 90_000 {
+		enc = enc[:90_000]
+	}
+	head, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil && len(head) == 0 {
+		return 0, false
+	}
+	w, h := imagePixelDimensions(head)
+	if w <= 0 || h <= 0 {
+		return 0, false
+	}
+	return imageTokensFromDimensions(w, h), true
+}
+
+// imageTokensFromDimensions Anthropic 预处理等价：长边压到 ≤1568 再按
+// (w*h)/750 计（向上取整）
+func imageTokensFromDimensions(w, h int) int {
+	const longEdge = 1568
+	if w > longEdge || h > longEdge {
+		if w >= h {
+			h = h * longEdge / w
+			w = longEdge
+		} else {
+			w = w * longEdge / h
+			h = longEdge
+		}
+	}
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	return (w*h + 749) / 750
+}
+
+// imagePixelDimensions 从图片头部字节嗅探像素尺寸（PNG IHDR / JPEG SOF0-15）。
+// 非 PNG/JPEG 或头部截断返回 0,0
+func imagePixelDimensions(d []byte) (int, int) {
+	if len(d) >= 24 && bytes.Equal(d[:8], []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}) {
+		return int(binary.BigEndian.Uint32(d[16:20])), int(binary.BigEndian.Uint32(d[20:24]))
+	}
+	if len(d) >= 4 && d[0] == 0xFF && d[1] == 0xD8 {
+		for i := 2; i+9 < len(d); {
+			if d[i] != 0xFF {
+				i++
+				continue
+			}
+			m := d[i+1]
+			if m == 0x01 || m == 0xD8 || (m >= 0xD0 && m <= 0xD7) {
+				i += 2 // 无长度段的独立标记
+				continue
+			}
+			if i+4 > len(d) {
+				break
+			}
+			segLen := int(binary.BigEndian.Uint16(d[i+2 : i+4]))
+			if (m >= 0xC0 && m <= 0xCF) && m != 0xC4 && m != 0xC8 && m != 0xCC {
+				// SOF0-15（除 DHT/DAC/JPG）：高、宽
+				return int(binary.BigEndian.Uint16(d[i+7 : i+9])), int(binary.BigEndian.Uint16(d[i+5 : i+7]))
+			}
+			if segLen < 2 {
+				break
+			}
+			i += 2 + segLen
+		}
+	}
+	return 0, 0
 }
 
 // estimateMessagesTokens 遍历 messages 数组，逐条累加内容与框架开销

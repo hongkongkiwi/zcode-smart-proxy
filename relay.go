@@ -855,14 +855,10 @@ func (z *ZCodeAPI) forwardOnce(w http.ResponseWriter, r *http.Request, a *Accoun
 				return outcomeUpstreamError
 			}
 			// 2xx + JSON 但不是 message（上游内联错误信封，SSE 路径已证实存在）：
-			// 不得洗成"成功空响应"，按上游错误处理
-			if isEmptyMessageBody(body) {
-				// 2xx message 信封但零内容块（上游"成功空响应"：验证码待解/套餐
-				// 异常的已知形态）：此时还没写任何响应头，无损换下一条路径/账号
-				z.markChannelFailure(rc, a, channel, "上游 2xx 空内容响应", 60)
-				z.recordUsage(a, r, payload, http.StatusBadGateway, start, 0, nil, rc.clientStream)
-				return outcomeNextAccount
-			}
+			// 不得洗成"成功空响应"，按上游错误处理。
+			// 判序必须先信封后空体（isEmptyMessageBody 的契约要求）：错误信封
+			// 同样没有 content，先空体判定会把 {"error":...}/{"code":1302} 误判
+			// 成"空内容响应"去冷却健康账号，而不是走内联错误路径（评审 L3）
 			if isErrorEnvelope(body) {
 				z.pool.MarkFailed(a, "上游 2xx 内联错误信封")
 				z.recordUsage(a, r, payload, http.StatusBadGateway, start, 0, nil, rc.clientStream)
@@ -871,6 +867,13 @@ func (z *ZCodeAPI) forwardOnce(w http.ResponseWriter, r *http.Request, a *Accoun
 				// 可选状态，粘滞命中会把会话域钉死在持续吐错误信封的账号上
 				z.pool.ForgetSticky(rc.sessionKey())
 				return outcomeUpstreamError
+			}
+			if isEmptyMessageBody(body) {
+				// 2xx message 信封但零内容块（上游"成功空响应"：验证码待解/套餐
+				// 异常的已知形态）：此时还没写任何响应头，无损换下一条路径/账号
+				z.markChannelFailure(rc, a, channel, "上游 2xx 空内容响应", 60)
+				z.recordUsage(a, r, payload, http.StatusBadGateway, start, 0, nil, rc.clientStream)
+				return outcomeNextAccount
 			}
 			usage := parseAnthropicUsageJSON(body)
 			// 客户端遥测按 x-request-id → request-id 顺序读取（runner-telemetry）：
@@ -954,8 +957,8 @@ func (z *ZCodeAPI) markChannelFailure(rc *relayCtx, a *Account, channel, reason 
 }
 
 // isEmptyMessageBody 识别 2xx message 信封但零内容（content 缺失/空数组/空串）：
-// 上游验证码待解、token 过期、套餐异常时的"成功空响应"形态。调用方须先过
-// isErrorEnvelope（错误信封同样没有 content，不得误判成空消息）。
+// 上游验证码待解、token 过期、套餐异常时的"成功空响应"形态。错误信封同样没有
+// content，函数内联自守（评审 L3 后不再依赖调用方判序）。
 func isEmptyMessageBody(body []byte) bool {
 	var v struct {
 		Type    string          `json:"type"`
@@ -965,6 +968,9 @@ func isEmptyMessageBody(body []byte) bool {
 		return false
 	}
 	if v.Type != "" && v.Type != "message" {
+		return false
+	}
+	if isErrorEnvelope(body) {
 		return false
 	}
 	c := strings.TrimSpace(string(v.Content))
@@ -1218,6 +1224,38 @@ func hasProviderCode(text, code string) bool {
 		}
 	}
 	return false
+}
+
+// forwardLaneClientHeaders 闲时/高速卡 lane 推理请求的客户端 header 白名单
+// 透传——与 buildUpstreamRequest 的 forwardSet 同规（anthropic-beta、
+// traceparent、bigmodel 身份头、x-stainless-* 等），但剔除票据/卡号两键：
+// lane 里服务端是票据/卡片的唯一所有者（自有状态机发放），客户端自带的
+// 值不得覆盖服务端权威值（评审 2026-10-26 L6：mid-conversation-system 等
+// beta 头缺收会被上游 400 且误标记健康账号）
+func forwardLaneClientHeaders(r *http.Request, h http.Header) {
+	if r == nil {
+		return
+	}
+	for k, vals := range r.Header {
+		lk := strings.ToLower(k)
+		switch lk {
+		case "x-off-peak-ticket-id", "x-highspeed-card-id":
+			continue
+		}
+		if laneForwardSet[lk] || strings.HasPrefix(lk, "x-stainless-") {
+			if len(vals) > 0 && len(vals[0]) <= 4096 {
+				h.Set(lk, vals[0])
+			}
+		}
+	}
+}
+
+var laneForwardSet = map[string]bool{
+	"accept-language": true, "cache-control": true, "anthropic-beta": true,
+	"anthropic-dangerous-direct-browser-access": true, "traceparent": true,
+	"tracestate": true, "x-client-request-id": true,
+	"x-zcode-query-source": true, "x-zcode-trace-id": true,
+	"bigmodel-target-type": true, "bigmodel-organization": true, "bigmodel-project": true,
 }
 
 // ---- 请求体处理 ----

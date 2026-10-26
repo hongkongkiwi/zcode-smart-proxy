@@ -261,14 +261,14 @@ func main() {
 			defer inFlight.Done()
 			wt := &writeTracker{ResponseWriter: w}
 			defer func() {
-					if rec := recover(); rec != nil {
-						log.Printf("[http] handler panic on %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
-						if !wt.wrote {
-							wt.Header().Set("Content-Type", "application/json")
-							wt.WriteHeader(http.StatusBadGateway)
-							fmt.Fprint(wt, `{"type":"error","error":{"message":"internal error (panic contained)","type":"api_error"}}`)
-						}
+				if rec := recover(); rec != nil {
+					log.Printf("[http] handler panic on %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+					if !wt.wrote {
+						wt.Header().Set("Content-Type", "application/json")
+						wt.WriteHeader(http.StatusBadGateway)
+						fmt.Fprint(wt, `{"type":"error","error":{"message":"internal error (panic contained)","type":"api_error"}}`)
 					}
+				}
 			}()
 			authed.ServeHTTP(wt, r)
 		}),
