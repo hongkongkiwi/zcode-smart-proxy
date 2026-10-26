@@ -132,6 +132,36 @@ func TestErrorEnvelopeBeatsEmptyBody(t *testing.T) {
 	}
 }
 
+// 1005 耗尽信封（2xx + code:1005）：走耗尽分级 + 换号，绝不能写终态错误——
+// 部署后实测回归：终态化会砍断 free 侧耗尽的付费回退链，客户端直接吃 502
+func TestQuotaExhaustedEnvelopeFailsOver(t *testing.T) {
+	z, _, id, hits := newSpecialProtoTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"code":1005,"msg":"exceed quota limit","type":"error"}`)
+	})
+	w := httptest.NewRecorder()
+	z.relay(w, httptest.NewRequest(http.MethodPost, "/v1/messages", nil), &relayCtx{
+		provider: "zai", proto: protocolAnthropic,
+		body: map[string]interface{}{"model": "GLM-5.3", "messages": []interface{}{map[string]interface{}{"role": "user", "content": "hello"}}},
+	})
+	fresh, err := z.db.GetAccount(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Status != StatusExhausted {
+		t.Fatalf("account status = %s, want exhausted (quota envelope must feed the exhaustion ladder)", fresh.Status)
+	}
+	if strings.Contains(w.Body.String(), "1005") {
+		t.Fatalf("envelope must not be written terminally to the client: %s", w.Body.String())
+	}
+	if n := hits.Load(); n != 2 {
+		t.Fatalf("upstream hits = %d, want 2 (free attempt + paid fallback on the same mock)", n)
+	}
+	if !isExhaustedError(200, `{"code":1005,"msg":"exceed quota limit"}`) {
+		t.Fatalf("1005 exceed-quota-limit body must classify as exhaustion")
+	}
+}
+
 // ---- M1(security)：同站 CSRF 闸（同 host 异端口 Origin 拒绝；无 Origin 客户端不受影响）----
 
 func TestAdminCSRFOriginGate(t *testing.T) {

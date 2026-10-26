@@ -860,6 +860,26 @@ func (z *ZCodeAPI) forwardOnce(w http.ResponseWriter, r *http.Request, a *Accoun
 			// 同样没有 content，先空体判定会把 {"error":...}/{"code":1302} 误判
 			// 成"空内容响应"去冷却健康账号，而不是走内联错误路径（评审 L3）
 			if isErrorEnvelope(body) {
+				// 配额耗尽族（1005 exceed quota limit 等，网关以 2xx+信封回）：
+				// 走耗尽分级继续换号——free 侧耗尽必须保住付费回退链，写终态
+				// 会把 free_first 语义砍断（2026-10-26 部署后实测回归）
+				if isExhaustedError(resp.StatusCode, string(body)) {
+					if channel == ChannelPaid {
+						z.pool.MarkPaidExhausted(a, "付费通道余额/额度不足")
+					} else {
+						z.pool.MarkExhausted(a, "额度已用完")
+						exhaustedID := a.ID
+						z.goBackground("quota-refresh", func() {
+							fresh, err := z.db.GetAccount(exhaustedID)
+							if err != nil {
+								return
+							}
+							z.RefreshAccountQuotaThrottled(fresh)
+						})
+					}
+					rc.sawNonRateCooldown = true
+					return outcomeNextAccount
+				}
 				z.pool.MarkFailed(a, "上游 2xx 内联错误信封")
 				z.recordUsage(a, r, payload, http.StatusBadGateway, start, 0, nil, rc.clientStream)
 				writeUpstreamErrorForProto(w, resp, string(body), rc.proto)
@@ -1165,7 +1185,8 @@ func isExhaustedError(statusCode int, text string) bool {
 	low := strings.ToLower(text)
 	for _, m := range []string{
 		"insufficient balance", "insufficient funds", "no resource package",
-		"resource package exhausted", "quota exceeded", "余额不足", "额度已用完",
+		"resource package exhausted", "quota exceeded", "exceed quota limit",
+		"余额不足", "额度已用完",
 	} {
 		if strings.Contains(low, m) {
 			return true
