@@ -25,6 +25,8 @@ func TestIsSpecialProtocolBizCode(t *testing.T) {
 		{"offpeak queued code", specialProtoOffPeak, 429, `{"code":3105,"msg":"queued"}`, true},
 		{"offpeak bare 429 = queue signal", specialProtoOffPeak, 429, `{"error":{"message":"busy"}}`, true},
 		{"offpeak ticket expired", specialProtoOffPeak, 400, `{"code":3102,"msg":"ticket unavailable"}`, true},
+		{"offpeak ticket wrong state (3.17.1)", specialProtoOffPeak, 400, `{"code":3104,"msg":"invalid off-peak ticket"}`, true},
+		{"offpeak window expired (3.17.1)", specialProtoOffPeak, 400, `{"code":3106,"msg":"off-peak active window expired"}`, true},
 		{"offpeak legacy 3001 compat", specialProtoOffPeak, 400, `{"code": 3001}`, true},
 		{"offpeak eligibility", specialProtoOffPeak, 400, `{"code":3101}`, true},
 		{"offpeak idle quota", specialProtoOffPeak, 400, `{"code":3103}`, true},

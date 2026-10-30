@@ -14,6 +14,9 @@ package main
 //
 // 票状态机：queued → ready/active → settled；expired/not_found 需重新取票。
 // 服务端 next_poll_after / active_deadline / next_take_at 均为 unix 秒。
+// 推理面票据死亡码（透传族，见 relay.go isSpecialProtocolBizCode）：3102 通用
+// 过期/未知；3104 状态错（settled/queued 下推理）；3106 就绪/激活窗口过期
+// （3.17.1 起从 3102 桶拆出）——三者客户端适配层同 task_id 重取续跑。
 
 import (
 	"bytes"

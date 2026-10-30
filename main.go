@@ -399,7 +399,7 @@ func registerModelRoutes(mux *http.ServeMux, zapi *ZCodeAPI) {
 	// （zcode-builtin.json：account:{zai,bigmodel}-offpeak-idle-plan 的 baseUrl =
 	// {origin}/api/v1/off-peak/anthropic，3.15.1 起内置），同样子树别名到
 	// HandleMessages；客户端侧票据号 header（x-off-peak-ticket-id）白名单透传，
-	// 闲时专属业务码（3101-3105）按形状透传不惩罚账号。仅推理子树——
+	// 闲时专属业务码（3101-3106；3104/3106 为 3.17.1 新拆分）按形状透传不惩罚账号。仅推理子树——
 	// /api/v1/off-peak/ticket* 是管理面取票/查票端点，客户端直连官方源站，
 	// 不经本代理也不开认证（绝不留成未认证模型端点）
 	mux.HandleFunc("/api/v1/off-peak/anthropic/", zapi.HandleMessages)

@@ -1203,8 +1203,11 @@ func isRiskBlocked(text string) bool {
 
 // isSpecialProtocolBizCode 闲时/高速卡形状专属业务码识别（forwardOnce 透传分支用）。
 // 语义对齐 zai-org/ZCode 适配层：offpeak 形状收 3105 排队（含裸 429）、3102 票据
-// 不可用、3001 旧网关滚动发布兼容、3101 资格、3103 闲时配额；highspeed 形状收
-// 3402 卡过期（provider_code 形态，键名两种拼写都收）。
+// 不可用、3104 票据状态错（settled/queued，3.17.1 从 3102 桶拆出）、3106 票据
+// 就绪/激活窗口过期（3.17.1 拆出）、3001 旧网关滚动发布兼容、3101 资格、
+// 3103 闲时配额；highspeed 形状收 3402 卡过期（provider_code 形态，键名两种
+// 拼写都收）。3104/3106 与 3102 同族：票据死亡信号，客户端适配层同 task_id
+// 重取续跑——描述计划侧票据状态，与池账号健康无关。
 func isSpecialProtocolBizCode(shape string, statusCode int, text string) bool {
 	low := strings.ToLower(text)
 	switch shape {
@@ -1212,7 +1215,7 @@ func isSpecialProtocolBizCode(shape string, statusCode int, text string) bool {
 		if statusCode == http.StatusTooManyRequests {
 			return true
 		}
-		for _, code := range []string{"3101", "3102", "3103", "3105", "3001"} {
+		for _, code := range []string{"3101", "3102", "3103", "3104", "3105", "3106", "3001"} {
 			if hasBizCode(low, code) {
 				return true
 			}
