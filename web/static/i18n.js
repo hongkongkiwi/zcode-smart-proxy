@@ -764,6 +764,31 @@ const I18N_EN = {
   '轮询已停止: %s（如已完成授权请刷新账号列表）': 'Polling stopped: %s (refresh the account list if you already finished authorising)',
   'current password incorrect': 'Current password incorrect',
   'old password incorrect': 'Old password incorrect',
+
+  // TLS 指纹预置（标签由 /api/fingerprints 提供，中文原文即 key）
+  '基础': 'Basic',
+  '浏览器': 'Browsers',
+  '运行时与工具': 'Runtimes & tools',
+  '移动端': 'Mobile',
+  '自定义': 'Custom',
+  '关闭（Go 默认指纹）': 'Off (Go default fingerprint)',
+  '随机化指纹': 'Randomised fingerprint',
+  'Chrome 浏览器（自动最新）': 'Chrome (latest automatically)',
+  'Chrome 83（旧版 Electron 常见）': 'Chrome 83 (common in older Electron)',
+  'Firefox 浏览器（120）': 'Firefox (120)',
+  'Safari 浏览器（16.0）': 'Safari (16.0)',
+  'Edge 浏览器（85）': 'Edge (85)',
+  'QQ 浏览器（11.1）': 'QQ Browser (11.1)',
+  '360 浏览器（7.5）': '360 Browser (7.5)',
+  'Bun.js（BoringSSL）': 'Bun.js (BoringSSL)',
+  'Node.js（OpenSSL）': 'Node.js (OpenSSL)',
+  'Deno（rustls）': 'Deno (rustls)',
+  'curl（OpenSSL）': 'curl (OpenSSL)',
+  'OkHttp 3（Android）': 'OkHttp 3 (Android)',
+  'Go 标准库（crypto/tls）': 'Go standard library (crypto/tls)',
+  'iOS Safari（14）': 'iOS Safari (14)',
+  'Android OkHttp（11）': 'Android OkHttp (11)',
+  '自定义 JA3 指纹': 'Custom JA3 fingerprint',
 };
 
 // ---- 启动：解析语言并应用到静态 DOM（脚本位于 body 末尾，DOM 已就绪） ----

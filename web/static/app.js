@@ -1696,8 +1696,8 @@ async function loadFingerprints() {
     const groups = {};
     (d.fingerprints || []).forEach(f => { (groups[f.group] = groups[f.group] || []).push(f); });
     sel.innerHTML = Object.entries(groups).map(([g, list]) =>
-      `<optgroup label="${esc(g)}">` + list.map(f =>
-        `<option value="${esc(f.id)}">${esc(f.label)}</option>`).join('') + '</optgroup>').join('');
+      `<optgroup label="${esc(t(g))}">` + list.map(f =>
+        `<option value="${esc(f.id)}">${esc(t(f.label))}</option>`).join('') + '</optgroup>').join('');
     // 选中当前生效值；若不在预置表中（旧库残留）回落到 chrome，避免静默显示第一项
     const cur = window._fpCurrent || 'chrome';
     sel.value = [...sel.options].some(o => o.value === cur) ? cur : 'chrome';
