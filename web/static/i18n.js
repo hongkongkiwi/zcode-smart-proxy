@@ -789,6 +789,7 @@ const I18N_EN = {
   'iOS Safari（14）': 'iOS Safari (14)',
   'Android OkHttp（11）': 'Android OkHttp (11)',
   '自定义 JA3 指纹': 'Custom JA3 fingerprint',
+  '若账号已重命名，旧登录名 admin 不再有效，请使用当前用户名。': 'If the account was renamed, the old login name admin no longer works; use the current username.',
 };
 
 // ---- 启动：解析语言并应用到静态 DOM（脚本位于 body 末尾，DOM 已就绪） ----

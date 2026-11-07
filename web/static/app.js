@@ -187,7 +187,13 @@ async function doLogin() {
     showApp(data.username);
     if (data.is_default_password) warnDefaultPassword();
   } catch (e) {
-    const msg = e.message || t('登录失败');
+    let msg = e.message || t('登录失败');
+    const typedUser = (document.getElementById('loginUser').value || '').trim();
+    // 重命名后旧用户名失效，但浏览器的已存凭据仍会填 admin：
+    // 只在这种情况下补一句提示，避免把普通的密码错误说成用户名问题。
+    if (/invalid username or password|用户名或密码错误/i.test(msg) && /^admin$/i.test(typedUser)) {
+      msg += ' · ' + t('若账号已重命名，旧登录名 admin 不再有效，请使用当前用户名。');
+    }
     errEl.textContent = msg;
     errEl.style.display = 'block';   // 关键：显示错误框（CSS 默认 display:none）
     toast(msg, 'error');             // 同时弹 toast，确保可见
@@ -544,7 +550,11 @@ async function enableTOTP() {
     document.getElementById('totpRecoveryBox').style.display = '';
     toast(t('TOTP 已启用'));
     loadTwoFactor();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) {
+    toast(e.message, 'error');
+    const pf = document.getElementById('totpPassword');
+    if (pf) { pf.value = ''; pf.focus(); }
+  }
 }
 
 async function disableTOTP() {
