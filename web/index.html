@@ -3,89 +3,200 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ZCode Proxy Management</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='6' y1='4' x2='44' y2='46' gradientUnits='userSpaceOnUse'%3E%3Cstop stop-color='%236366f1'/%3E%3Cstop offset='.55' stop-color='%238b5cf6'/%3E%3Cstop offset='1' stop-color='%23ec4899'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M10 8 H38 L24 26 H34 L14 42 L20 24 H10 Z' fill='url(%23g)'/%3E%3C/svg%3E">
+<title>ZCode Proxy</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%235b4fe9'/%3E%3Cpath d='M13 10 H35 L23 25 H32 L15 39 L20 23 H13 Z' fill='%23fff'/%3E%3C/svg%3E">
+<script>
+/* Theme before first paint: stored choice wins, otherwise follow the OS. */
+(function () {
+  try {
+    var t = localStorage.getItem('zcode_theme');
+    if (t !== 'light' && t !== 'dark') {
+      t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+</script>
 <link rel="stylesheet" href="/web/static/style.css">
 </head>
 <body>
 
-<!-- Login Page -->
+<a class="skip-link" href="#mainContent" data-i18n="跳到主内容">跳到主内容</a>
+
+<!-- Login -->
 <div class="login-page" id="loginPage" style="display:none">
-<div class="login-box">
-<div style="display:flex;justify-content:center;margin-bottom:14px"><svg width="58" height="58" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="zLG2" x1="6" y1="4" x2="44" y2="46" gradientUnits="userSpaceOnUse"><stop stop-color="#6366f1"/><stop offset=".55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#ec4899"/></linearGradient></defs><path d="M10 8 H38 L24 26 H34 L14 42 L20 24 H10 Z" fill="url(#zLG2)"/></svg></div>
-<h2>ZCode Proxy</h2>
-<div class="subtitle" data-i18n="多账号管理 · 2API 网关">多账号管理 · 2API 网关</div>
-<div class="login-error" id="loginError"></div>
-<div class="form-group">
-<label data-i18n="用户名">用户名</label>
-<input type="text" id="loginUser" placeholder="admin" autocomplete="username">
+<div class="login-shell">
+<div class="login-brand">
+<svg class="brand-mark" width="34" height="34" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="12" fill="var(--accent)"/><path d="M13 10 H35 L23 25 H32 L15 39 L20 23 H13 Z" fill="var(--accent-ink)"/></svg>
+<span class="brand-name">ZCode Proxy</span>
 </div>
-<div class="form-group">
-<label data-i18n="密码">密码</label>
-<input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+<form class="login-card" onsubmit="event.preventDefault();doLogin()">
+<h1 data-i18n="登录">登录</h1>
+<p class="login-sub" data-i18n="多账号管理 · 2API 网关">多账号管理 · 2API 网关</p>
+<div class="login-error" id="loginError" role="alert" aria-live="polite"></div>
+<div class="field">
+<label for="loginUser" data-i18n="用户名">用户名</label>
+<input type="text" id="loginUser" autocomplete="username" autocapitalize="off" spellcheck="false">
 </div>
-<button class="btn btn-primary" onclick="doLogin()" data-i18n="登录">登录</button>
-<div class="hint" data-i18n="默认账户 admin，初始密码见服务端首次启动日志（或设置 ZCODE_WEB_PASS）">默认账户 admin，初始密码见服务端首次启动日志（或设置 ZCODE_WEB_PASS）</div>
-<div style="margin-top:14px;display:flex;justify-content:center"><select class="lang-select" onchange="setLangChoice(this.value)" title="Language / 语言">
-<option value="auto" data-i18n="跟随系统">跟随系统</option>
-<option value="zh">简体中文</option>
-<option value="en">English</option>
-</select></div>
+<div class="field">
+<label for="loginPass" data-i18n="密码">密码</label>
+<input type="password" id="loginPass" autocomplete="current-password">
 </div>
-</div>
-
-<!-- Main App -->
-<div id="mainApp" style="display:none">
-
-<header class="topnav">
-<div class="topnav-inner">
-<div class="brand-mini"><svg width="30" height="30" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="zLG1" x1="6" y1="4" x2="44" y2="46" gradientUnits="userSpaceOnUse"><stop stop-color="#6366f1"/><stop offset=".55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#ec4899"/></linearGradient></defs><path d="M10 8 H38 L24 26 H34 L14 42 L20 24 H10 Z" fill="url(#zLG1)"/></svg><span class="brand-txt"><span>ZCode</span><span class="brand-sub">Proxy Management</span></span></div>
-<nav class="pill-nav">
-<a class="nav-link active" data-section="dashboard"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span data-i18n="仪表盘">仪表盘</span></a>
-<a class="nav-link" data-section="accounts"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span data-i18n="账号管理">账号管理</span></a>
-<a class="nav-link" data-section="keys"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg><span data-i18n="网关 Key / API Keys">网关 Key / API Keys</span></a>
-<a class="nav-link" data-section="activity"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6"/><path d="M12 3v13m0-13l-4 4m4-4l4 4"/></svg><span data-i18n="活动任务">活动任务</span></a>
-<a class="nav-link" data-section="usage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg><span data-i18n="使用记录">使用记录</span></a>
-<a class="nav-link" data-section="llmtest"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg><span data-i18n="LLM 测试">LLM 测试</span></a>
-<a class="nav-link" data-section="settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/></svg><span data-i18n="设置">设置</span></a>
-<a class="nav-link" data-section="docs"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg><span data-i18n="API 文档">API 文档</span></a>
-<div class="nav-more">
-<a class="nav-link nav-more-btn" onclick="this.parentNode.classList.toggle('open')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg><span data-i18n="更多操作">更多操作</span></a>
-<div class="nav-more-menu">
-<div class="menu-group" data-i18n="账号导入">账号导入</div>
-<button onclick="navMoreDo(this,importLocalAccount)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span data-i18n="导入本地客户端账号">导入本地客户端账号</span></button>
-<button onclick="navMoreDo(this,showOAuthModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3z"/></svg><span data-i18n="OAuth 登录新账号">OAuth 登录新账号</span></button>
-<button onclick="navMoreDo(this,showPasteModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span data-i18n="粘贴 JWT / API Key">粘贴 JWT / API Key</span></button>
-<div class="menu-divider"></div>
-<div class="menu-group" data-i18n="迁移">迁移</div>
-<button onclick="navMoreDo(this,showExportBundleModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 12l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span data-i18n="导出加密账号包">导出加密账号包</span></button>
-<button onclick="navMoreDo(this,showImportBundleModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span data-i18n="导入加密账号包">导入加密账号包</span></button>
-<div class="menu-divider"></div>
-<div class="menu-group" data-i18n="同步">同步</div>
-<button onclick="navMoreDo(this,refreshAllQuota)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg><span data-i18n="刷新所有额度">刷新所有额度</span></button>
-<button onclick="navMoreDo(this,detectAllAccounts)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg><span data-i18n="检测全部活动">检测全部活动</span></button>
-</div>
-</div>
-</nav>
-<div class="top-user">
-<span class="status-chip" id="gwStatusChip"><span class="dot"></span><span class="status-txt" data-i18n="运行中">运行中</span></span>
-<button class="btn-logout-top" id="btnPauseGateway" onclick="toggleGatewayPause()" data-i18n="暂停网关">暂停网关</button>
-<select class="lang-select" onchange="setLangChoice(this.value)" title="Language / 语言">
+<button class="btn btn-primary" type="submit" data-i18n="登录">登录</button>
+<p class="hint" style="text-align:center;margin-top:16px" data-i18n="初始密码见服务端首次启动日志，或由 ZCODE_WEB_PASS 指定">初始密码见服务端首次启动日志，或由 ZCODE_WEB_PASS 指定</p>
+</form>
+<div class="login-foot">
+<select class="lang-select" onchange="setLangChoice(this.value)" data-i18n-title="语言 / Language" title="语言 / Language">
 <option value="auto" data-i18n="跟随系统">跟随系统</option>
 <option value="zh">简体中文</option>
 <option value="en">English</option>
 </select>
-<div class="user-avatar" id="userAvatar">A</div>
+<span class="hint">v3.14.4</span>
+</div>
+</div>
+</div>
+
+<!-- App -->
+<div id="mainApp" class="app" style="display:none">
+
+<div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleSidebar(false)"></div>
+
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-head">
+<a class="brand" href="#dashboard" onclick="event.preventDefault();switchSection('dashboard')">
+<svg class="brand-mark" width="30" height="30" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="12" fill="var(--accent)"/><path d="M13 10 H35 L23 25 H32 L15 39 L20 23 H13 Z" fill="var(--accent-ink)"/></svg>
+<span class="brand-txt"><span class="brand-name">ZCode Proxy</span><span class="brand-sub">CONTROL PLANE</span></span>
+</a>
+<button class="icon-btn menu-btn" onclick="toggleSidebar(false)" aria-label="关闭菜单" data-i18n-title="关闭菜单" title="关闭菜单">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+</button>
+</div>
+
+<nav class="app-nav" aria-label="主导航" data-i18n-title="主导航" title="主导航">
+<p class="nav-group-label" data-i18n="概览">概览</p>
+<button type="button" class="nav-link active" data-section="dashboard" aria-current="page">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+<span data-i18n="仪表盘">仪表盘</span>
+</button>
+
+<p class="nav-group-label" data-i18n="凭据">凭据</p>
+<button type="button" class="nav-link" data-section="accounts">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+<span data-i18n="账号管理">账号管理</span>
+</button>
+<button type="button" class="nav-link" data-section="keys">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+<span data-i18n="网关 Key">网关 Key</span>
+</button>
+
+<p class="nav-group-label" data-i18n="运维">运维</p>
+<button type="button" class="nav-link" data-section="activity">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6"/><path d="M12 3v13m0-13l-4 4m4-4l4 4"/></svg>
+<span data-i18n="活动任务">活动任务</span>
+</button>
+<button type="button" class="nav-link" data-section="usage">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>
+<span data-i18n="使用记录">使用记录</span>
+</button>
+<button type="button" class="nav-link" data-section="llmtest">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg>
+<span data-i18n="LLM 测试">LLM 测试</span>
+</button>
+
+<p class="nav-group-label" data-i18n="系统">系统</p>
+<button type="button" class="nav-link" data-section="settings">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/></svg>
+<span data-i18n="设置">设置</span>
+</button>
+<button type="button" class="nav-link" data-section="docs">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>
+<span data-i18n="API 文档">API 文档</span>
+</button>
+
+<div class="nav-more" style="margin-top:6px">
+<button type="button" class="nav-link nav-more-btn" onclick="this.parentNode.classList.toggle('open')" aria-haspopup="true">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
+<span data-i18n="更多操作">更多操作</span>
+</button>
+<div class="nav-more-menu">
+<div class="menu-group" data-i18n="账号导入">账号导入</div>
+<button type="button" onclick="navMoreDo(this,importLocalAccount)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span data-i18n="导入本地客户端账号">导入本地客户端账号</span></button>
+<button type="button" onclick="navMoreDo(this,showOAuthModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3z"/></svg><span data-i18n="OAuth 登录新账号">OAuth 登录新账号</span></button>
+<button type="button" onclick="navMoreDo(this,showPasteModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span data-i18n="粘贴 JWT / API Key">粘贴 JWT / API Key</span></button>
+<div class="menu-divider"></div>
+<div class="menu-group" data-i18n="迁移">迁移</div>
+<button type="button" onclick="navMoreDo(this,showExportBundleModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 12l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span data-i18n="导出加密账号包">导出加密账号包</span></button>
+<button type="button" onclick="navMoreDo(this,showImportBundleModal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span data-i18n="导入加密账号包">导入加密账号包</span></button>
+<div class="menu-divider"></div>
+<div class="menu-group" data-i18n="同步">同步</div>
+<button type="button" onclick="navMoreDo(this,refreshAllQuota)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg><span data-i18n="刷新所有额度">刷新所有额度</span></button>
+<button type="button" onclick="navMoreDo(this,detectAllAccounts)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg><span data-i18n="检测全部活动">检测全部活动</span></button>
+</div>
+</div>
+</nav>
+
+<div class="sidebar-foot">
+<div class="meta">
+<select class="lang-select" onchange="setLangChoice(this.value)" data-i18n-title="语言 / Language" title="语言 / Language">
+<option value="auto" data-i18n="跟随系统">跟随系统</option>
+<option value="zh">简体中文</option>
+<option value="en">English</option>
+</select>
+<button type="button" class="icon-btn" id="themeToggle" onclick="toggleTheme()" data-i18n-title="切换主题" title="切换主题" aria-label="切换主题">
+<svg class="icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>
+<svg class="icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+</button>
+</div>
+</div>
+</aside>
+
+<div class="app-main">
+<header class="topbar">
+<button type="button" class="icon-btn menu-btn" onclick="toggleSidebar(true)" aria-label="打开菜单" data-i18n-title="打开菜单" title="打开菜单">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+</button>
+<div class="page-title" id="pageTitle">仪表盘</div>
+<div class="topbar-actions">
+<span class="status-chip" id="gwStatusChip"><span class="dot"></span><span class="status-txt" data-i18n="运行中">运行中</span></span>
+<button type="button" class="btn btn-sm btn-secondary" id="btnPauseGateway" onclick="toggleGatewayPause()" data-i18n="暂停网关">暂停网关</button>
+<div class="user-menu" id="userMenu">
+<button type="button" class="user-btn" onclick="this.parentNode.classList.toggle('open')" aria-haspopup="true">
+<span class="user-avatar" id="userAvatar">A</span>
 <span class="top-user-name" id="welcomeUser"></span>
-<button class="btn-logout-top" onclick="doLogout()" data-i18n="退出">退出</button>
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+</button>
+<div class="user-menu-pop">
+<div class="who"><div class="n" id="menuUserName">admin</div><div class="r" data-i18n="管理员">管理员</div></div>
+<div class="divider"></div>
+<button type="button" onclick="this.closest('.user-menu').classList.remove('open');switchSection('settings');switchSettingsTab('security')">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg>
+<span data-i18n="账号与安全">账号与安全</span>
+</button>
+<button type="button" class="danger" onclick="this.closest('.user-menu').classList.remove('open');doLogout()">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>
+<span data-i18n="退出">退出</span>
+</button>
+</div>
 </div>
 </div>
 </header>
-<main class="app-content">
+
+<main class="app-content" id="mainContent">
 
 <!-- 仪表盘 -->
 <div class="section active" id="section-dashboard">
-<div class="stats-bar" style="grid-template-columns:repeat(9,1fr)">
+<div class="page-head">
+<div>
+<h1 data-i18n="仪表盘">仪表盘</h1>
+<p class="page-desc" data-i18n="账号、额度与近七日活动概览">账号、额度与近七日活动概览</p>
+</div>
+<div class="page-actions">
+<button class="btn btn-sm btn-secondary" onclick="loadDashboard()" data-i18n="刷新">刷新</button>
+</div>
+</div>
+<div class="stats-bar">
 <div class="stat-card blue"><div class="stat-body"><div class="label" data-i18n="总账号数">总账号数</div><div class="value" id="statTotal">-</div></div></div>
 <div class="stat-card green"><div class="stat-body"><div class="label" data-i18n="可用账号">可用账号</div><div class="value" id="statSelectable">-</div></div></div>
 <div class="stat-card orange"><div class="stat-body"><div class="label" data-i18n="总剩余额度">总剩余额度</div><div class="value" id="statRemaining">-</div></div></div>
@@ -94,67 +205,101 @@
 <div class="stat-card green"><div class="stat-body"><div class="label" data-i18n="平均首字延迟">平均首字延迟</div><div class="value" id="statTtft">-</div></div></div>
 <div class="stat-card green"><div class="stat-body"><div class="label" data-i18n="成功率">成功率</div><div class="value" id="statSuccess">-</div></div></div>
 <div class="stat-card purple"><div class="stat-body"><div class="label" data-i18n="缓存命中率">缓存命中率</div><div class="value" id="statCacheHit">-</div></div></div>
-<div class="stat-card blue"><div class="stat-body"><div class="label" data-i18n="TTFT P50 / P95">TTFT P50 / P95</div><div class="value" id="statTtftP" style="font-size:17px">-</div></div></div>
+<div class="stat-card blue"><div class="stat-body"><div class="label" data-i18n="TTFT P50 / P95">TTFT P50 / P95</div><div class="value" id="statTtftP">-</div></div></div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="系统状态">系统状态</h2><button class="btn btn-sm btn-secondary" onclick="loadDashboard()" data-i18n="刷新">刷新</button></div>
-<div style="padding:20px" id="dashStatus"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
+<div class="card-header"><div><h2 data-i18n="系统状态">系统状态</h2></div></div>
+<div class="card-body" id="dashStatus"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="账号状态分布">账号状态分布</h2></div>
-<div style="padding:20px" id="dashAccounts"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
+<div class="card-header"><div><h2 data-i18n="账号状态分布">账号状态分布</h2></div></div>
+<div class="card-body" id="dashAccounts"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
 </div>
 </div>
 
 <!-- 账号管理 -->
 <div class="section" id="section-accounts">
-<div class="toolbar">
-<span class="toolbar-title" data-i18n="分组筛选">分组筛选</span>
-<select id="groupFilter" onchange="loadAccounts()" class="form-input" style="width:auto"><option value="" data-i18n="全部分组">全部分组</option></select>
-<div class="toolbar-sep"></div>
+<div class="page-head">
+<div>
+<h1 data-i18n="账号管理">账号管理</h1>
+<p class="page-desc" data-i18n="导入上游账号、查看额度与状态，按分组调度">导入上游账号、查看额度与状态，按分组调度</p>
+</div>
+<div class="page-actions">
 <button class="btn btn-sm btn-primary" onclick="showOAuthModal()" data-i18n="+ OAuth 登录">+ OAuth 登录</button>
 <button class="btn btn-sm btn-secondary" onclick="importLocalAccount()" data-i18n="导入本地账号">导入本地账号</button>
 <button class="btn btn-sm btn-secondary" onclick="showPasteModal()" data-i18n="粘贴导入">粘贴导入</button>
 <button class="btn btn-sm btn-secondary" onclick="refreshAllQuota()" data-i18n="刷新额度">刷新额度</button>
 </div>
+</div>
+<div class="toolbar">
+<span class="toolbar-title" data-i18n="分组筛选">分组筛选</span>
+<select id="groupFilter" onchange="loadAccounts()" class="form-input" style="width:auto"><option value="" data-i18n="全部分组">全部分组</option></select>
+</div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="账号列表">账号列表</h2></div>
-<div id="accountsTable"><div class="empty"><p data-i18n="暂无账号，点击「导入本地账号」或「OAuth 登录」开始">暂无账号，点击「导入本地账号」或「OAuth 登录」开始</p></div></div>
+<div class="card-header"><div><h2 data-i18n="账号列表">账号列表</h2></div></div>
+<div id="accountsTable" class="card-body tight"><div class="empty"><p data-i18n="暂无账号，点击「导入本地账号」或「OAuth 登录」开始">暂无账号，点击「导入本地账号」或「OAuth 登录」开始</p></div></div>
 </div>
 </div>
 
 <!-- 网关 Key -->
 <div class="section" id="section-keys">
-<div class="toolbar">
+<div class="page-head">
+<div>
+<h1 data-i18n="网关 Key">网关 Key</h1>
+<p class="page-desc" data-i18n="发给客户端的 /v1 鉴权凭据，可按 Key 限制速率、额度与模型">发给客户端的 /v1 鉴权凭据，可按 Key 限制速率、额度与模型</p>
+</div>
+<div class="page-actions">
 <button class="btn btn-sm btn-primary" onclick="showKeyModal()" data-i18n="+ 新建 Key">+ 新建 Key</button>
 <button class="btn btn-sm btn-secondary" onclick="loadKeys()" data-i18n="刷新">刷新</button>
 </div>
+</div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="网关 Key / API Keys">网关 Key / API Keys</h2></div>
-<div id="keysTable"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
+<div class="card-header"><div><h2 data-i18n="网关 Key / API Keys">网关 Key / API Keys</h2></div></div>
+<div id="keysTable" class="card-body tight"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
 </div>
 </div>
 
 <!-- 活动任务 -->
 <div class="section" id="section-activity">
+<div class="page-head">
+<div>
+<h1 data-i18n="活动任务">活动任务</h1>
+<p class="page-desc" data-i18n="定时领取免费额度、自动重置与运行记录">定时领取免费额度、自动重置与运行记录</p>
+</div>
+<div class="page-actions">
+<button class="btn btn-sm btn-primary" onclick="showPlanModal()" data-i18n="+ 新建计划">+ 新建计划</button>
+</div>
+</div>
 <div id="planRunningBar"></div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="活动计划（cron 调度）">活动计划（cron 调度）</h2><button class="btn btn-sm btn-primary" onclick="showPlanModal()" data-i18n="+ 新建计划">+ 新建计划</button></div>
-<div id="plansTable"><div class="empty"><p data-i18n="暂无计划，点击「+ 新建计划」创建">暂无计划，点击「+ 新建计划」创建</p></div></div>
+<div class="card-header"><div><h2 data-i18n="活动计划（cron 调度）">活动计划（cron 调度）</h2></div>
+<button class="btn btn-sm btn-secondary" onclick="loadPlans()" data-i18n="刷新">刷新</button></div>
+<div id="plansTable" class="card-body tight"><div class="empty"><p data-i18n="暂无计划，点击「+ 新建计划」创建">暂无计划，点击「+ 新建计划」创建</p></div></div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="领取记录">领取记录</h2><button class="btn btn-sm btn-secondary" onclick="loadClaimRecords()" data-i18n="刷新">刷新</button></div>
-<div id="claimRecordsTable"><div class="empty"><p data-i18n="暂无领取记录">暂无领取记录</p></div></div>
+<div class="card-header"><div><h2 data-i18n="领取记录">领取记录</h2></div>
+<button class="btn btn-sm btn-secondary" onclick="loadClaimRecords()" data-i18n="刷新">刷新</button></div>
+<div id="claimRecordsTable" class="card-body tight"><div class="empty"><p data-i18n="暂无领取记录">暂无领取记录</p></div></div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="计划运行记录">计划运行记录</h2><button class="btn btn-sm btn-secondary" onclick="loadPlanRuns()" data-i18n="刷新">刷新</button></div>
-<div id="planRunsTable"><div class="empty"><p data-i18n="暂无运行记录">暂无运行记录</p></div></div>
+<div class="card-header"><div><h2 data-i18n="计划运行记录">计划运行记录</h2></div>
+<button class="btn btn-sm btn-secondary" onclick="loadPlanRuns()" data-i18n="刷新">刷新</button></div>
+<div id="planRunsTable" class="card-body tight"><div class="empty"><p data-i18n="暂无运行记录">暂无运行记录</p></div></div>
 </div>
 </div>
 
 <!-- 使用记录 -->
 <div class="section" id="section-usage">
-<div class="stats-bar" style="grid-template-columns:repeat(7,1fr)">
+<div class="page-head">
+<div>
+<h1 data-i18n="使用记录">使用记录</h1>
+<p class="page-desc" data-i18n="请求、Token 与延迟的逐条明细和聚合统计">请求、Token 与延迟的逐条明细和聚合统计</p>
+</div>
+<div class="page-actions">
+<button class="btn btn-sm btn-secondary" onclick="loadUsageRecords()" data-i18n="刷新">刷新</button>
+</div>
+</div>
+<div class="stats-bar">
 <div class="stat-card blue"><div class="stat-body"><div class="label" data-i18n="7日请求">7日请求</div><div class="value" id="uStatReq">-</div></div></div>
 <div class="stat-card green"><div class="stat-body"><div class="label" data-i18n="输入 Tokens">输入 Tokens</div><div class="value" id="uStatIn">-</div></div></div>
 <div class="stat-card orange"><div class="stat-body"><div class="label" data-i18n="输出 Tokens">输出 Tokens</div><div class="value" id="uStatOut">-</div></div></div>
@@ -164,110 +309,141 @@
 <div class="stat-card purple"><div class="stat-body"><div class="label" data-i18n="缓存命中率">缓存命中率</div><div class="value" id="uStatCacheHit">-</div></div></div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="使用记录">使用记录</h2><button class="btn btn-sm btn-secondary" onclick="loadUsageRecords()" data-i18n="刷新">刷新</button></div>
-<div id="usageTable"><div class="empty"><p data-i18n="暂无使用记录">暂无使用记录</p></div></div>
+<div class="card-header"><div><h2 data-i18n="使用记录">使用记录</h2></div>
+<button class="btn btn-sm btn-secondary" onclick="loadUsageRecords()" data-i18n="刷新">刷新</button></div>
+<div id="usageTable" class="card-body tight"><div class="empty"><p data-i18n="暂无使用记录">暂无使用记录</p></div></div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="按网关 Key 与按天统计（7 日）">按网关 Key 与按天统计（7 日）</h2><button class="btn btn-sm btn-secondary" onclick="loadUsageStats()" data-i18n="刷新">刷新</button></div>
-<div style="padding:20px" id="byKeyStats"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
-<div style="padding:0 20px 20px" id="dailyStats"></div>
-<div style="padding:0 20px 20px" id="hourlyStats"></div>
-<div style="padding:0 20px 20px" id="heatmapStats"></div>
+<div class="card-header"><div><h2 data-i18n="统计（按 Key、按天、按小时、365 天）">统计（按 Key、按天、按小时、365 天）</h2></div>
+<button class="btn btn-sm btn-secondary" onclick="loadUsageStats()" data-i18n="刷新">刷新</button></div>
+<div class="card-body" id="byKeyStats"><div class="empty"><p data-i18n="加载中…">加载中…</p></div></div>
+<div class="card-body" style="padding-top:0" id="dailyStats"></div>
+<div class="card-body" style="padding-top:0" id="hourlyStats"></div>
+<div class="card-body" style="padding-top:0" id="heatmapStats"></div>
 </div>
 </div>
 
-<!-- 设置 -->
+<!-- LLM 测试 -->
 <div class="section" id="section-llmtest">
+<div class="page-head">
+<div>
+<h1 data-i18n="LLM 测试">LLM 测试</h1>
+<p class="page-desc" data-i18n="用网关 Key 直接打一次请求，验证链路上游是否健康">用网关 Key 直接打一次请求，验证链路上游是否健康</p>
+</div>
+</div>
 <div class="settings-grid">
 <div class="card">
-<div class="card-header"><h2 data-i18n="LLM 连通性测试">LLM 连通性测试</h2><button class="btn btn-sm btn-secondary" onclick="loadLlmKey()" data-i18n="刷新 Key">刷新 Key</button></div>
-<div style="padding:20px">
-<div class="form-group" style="margin-bottom:12px"><label class="form-label" data-i18n="协议">协议</label>
+<div class="card-header"><div><h2 data-i18n="LLM 连通性测试">LLM 连通性测试</h2></div>
+<button class="btn btn-sm btn-secondary" onclick="loadLlmKey()" data-i18n="刷新 Key">刷新 Key</button></div>
+<div class="card-body">
+<div class="form-group"><label class="form-label" for="llmProto" data-i18n="协议">协议</label>
 <select id="llmProto" class="form-input">
 <option value="messages">Anthropic /v1/messages</option>
 <option value="chat">OpenAI /v1/chat/completions</option>
 <option value="responses">OpenAI /v1/responses</option>
 </select></div>
-<div class="form-group" style="margin-bottom:12px"><label class="form-label" data-i18n="模型">模型</label>
-<input type="text" id="llmModel" class="form-input" value="GLM-4.5-Flash"></div>
-<div class="llm-row" style="margin-bottom:12px">
-<div class="form-group" style="margin-bottom:0"><label class="form-label">max_tokens</label>
+<div class="form-group"><label class="form-label" for="llmModel" data-i18n="模型">模型</label>
+<input type="text" id="llmModel" class="form-input mono" value="GLM-4.5-Flash"></div>
+<div class="llm-row">
+<div class="form-group"><label class="form-label" for="llmMaxTokens">max_tokens</label>
 <input type="number" id="llmMaxTokens" class="form-input" value="256"></div>
-<div class="form-group" style="margin-bottom:0"><label class="form-label" data-i18n="模式">模式</label>
+<div class="form-group"><label class="form-label" for="llmStreamSel" data-i18n="模式">模式</label>
 <select id="llmStreamSel" class="form-input" onchange="document.getElementById('llmStream').checked=this.value==='1'">
 <option value="1" data-i18n="流式（SSE）">流式（SSE）</option>
 <option value="0" data-i18n="非流式">非流式</option>
 </select></div>
 </div>
 <input type="checkbox" id="llmStream" checked style="display:none">
-<div class="form-group" style="margin-bottom:12px"><label class="form-label" data-i18n="提示词">提示词</label>
+<div class="form-group"><label class="form-label" for="llmPrompt" data-i18n="提示词">提示词</label>
 <textarea id="llmPrompt" class="form-textarea" data-i18n-ph="输入要发送给模型的提示词…" placeholder="输入要发送给模型的提示词…">用一句话介绍你自己。</textarea>
 <div class="prompt-chips">
-<button onclick="setLlmPrompt(t('用一句话介绍你自己。'))" data-i18n="自我介绍">自我介绍</button>
-<button onclick="setLlmPrompt(t('用三行诗描述秋天。'))" data-i18n="写诗">写诗</button>
-<button onclick="setLlmPrompt(t('把下面句子翻译成英文：今天天气真好。'))" data-i18n="翻译">翻译</button>
-<button onclick="setLlmPrompt(t('解释什么是大语言模型，限 50 字。'))" data-i18n="概念解释">概念解释</button>
-<button onclick="setLlmPrompt(t('1+1=？只回答数字。'))" data-i18n="极简问答">极简问答</button>
+<button type="button" onclick="setLlmPrompt(t('用一句话介绍你自己。'))" data-i18n="自我介绍">自我介绍</button>
+<button type="button" onclick="setLlmPrompt(t('用三行诗描述秋天。'))" data-i18n="写诗">写诗</button>
+<button type="button" onclick="setLlmPrompt(t('把下面句子翻译成英文：今天天气真好。'))" data-i18n="翻译">翻译</button>
+<button type="button" onclick="setLlmPrompt(t('解释什么是大语言模型，限 50 字。'))" data-i18n="概念解释">概念解释</button>
+<button type="button" onclick="setLlmPrompt(t('1+1=？只回答数字。'))" data-i18n="极简问答">极简问答</button>
 </div></div>
-<div class="form-group" style="margin-bottom:12px"><label class="form-label" data-i18n="网关 Key">网关 Key</label>
+<div class="form-group"><label class="form-label" for="llmKey" data-i18n="网关 Key">网关 Key</label>
 <input type="text" id="llmKey" class="form-input mono" readonly></div>
 <button class="btn btn-primary" id="llmRunBtn" onclick="runLlmTest()" data-i18n="运行测试">运行测试</button>
 </div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="测试结果">测试结果</h2><button class="btn btn-sm btn-secondary" onclick="clearLlmHistory()" data-i18n="清空历史">清空历史</button></div>
-<div style="padding:20px">
+<div class="card-header"><div><h2 data-i18n="测试结果">测试结果</h2></div>
+<button class="btn btn-sm btn-secondary" onclick="clearLlmHistory()" data-i18n="清空历史">清空历史</button></div>
+<div class="card-body">
 <div id="llmResult" class="kv-grid" style="margin-bottom:14px"></div>
 <div class="form-group"><label class="form-label" data-i18n="响应内容">响应内容</label>
 <pre class="code-block" id="llmContent" style="min-height:120px;white-space:pre-wrap"></pre></div>
 <div class="form-group"><label class="form-label" data-i18n="历史（本次会话）">历史（本次会话）</label>
-<div id="llmHistory" style="font-size:12.5px;color:var(--c-text-light)"></div></div>
+<div id="llmHistory" class="hint"></div></div>
 </div>
 </div>
 </div>
 </div>
 
+<!-- 设置 -->
 <div class="section" id="section-settings">
-<div class="sub-tabs">
-<div class="sub-tab active" data-stab="security" onclick="switchSettingsTab('security')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span data-i18n="账号安全">账号安全</span></div>
-<div class="sub-tab" data-stab="strategy" onclick="switchSettingsTab('strategy')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg><span data-i18n="账户策略">账户策略</span></div>
-<div class="sub-tab" data-stab="proxy" onclick="switchSettingsTab('proxy')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3z"/></svg><span data-i18n="出口代理">出口代理</span></div>
-<div class="sub-tab" data-stab="tls" onclick="switchSettingsTab('tls')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg><span data-i18n="指纹伪装">指纹伪装</span></div>
-<div class="sub-tab" data-stab="captcha" onclick="switchSettingsTab('captcha')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span data-i18n="人机验证">人机验证</span></div>
-<div class="sub-tab" data-stab="models" onclick="switchSettingsTab('models')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg><span data-i18n="可用模型">可用模型</span></div>
+<div class="page-head">
+<div>
+<h1 data-i18n="设置">设置</h1>
+<p class="page-desc" data-i18n="账号安全、调度策略、出口代理与上游伪装">账号安全、调度策略、出口代理与上游伪装</p>
+</div>
+</div>
+<div class="sub-tabs" role="tablist" aria-label="设置分区" data-i18n-title="设置分区" title="设置分区">
+<button type="button" class="sub-tab active" role="tab" aria-selected="true" data-stab="security" onclick="switchSettingsTab('security')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span data-i18n="账号安全">账号安全</span></button>
+<button type="button" class="sub-tab" role="tab" aria-selected="false" data-stab="strategy" onclick="switchSettingsTab('strategy')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg><span data-i18n="账户策略">账户策略</span></button>
+<button type="button" class="sub-tab" role="tab" aria-selected="false" data-stab="proxy" onclick="switchSettingsTab('proxy')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3z"/></svg><span data-i18n="出口代理">出口代理</span></button>
+<button type="button" class="sub-tab" role="tab" aria-selected="false" data-stab="tls" onclick="switchSettingsTab('tls')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg><span data-i18n="指纹伪装">指纹伪装</span></button>
+<button type="button" class="sub-tab" role="tab" aria-selected="false" data-stab="captcha" onclick="switchSettingsTab('captcha')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span data-i18n="人机验证">人机验证</span></button>
+<button type="button" class="sub-tab" role="tab" aria-selected="false" data-stab="models" onclick="switchSettingsTab('models')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg><span data-i18n="可用模型">可用模型</span></button>
 </div>
 
-<div id="stab-security">
+<div id="stab-security" role="tabpanel">
 <div class="settings-grid">
 <div class="card">
-<div class="card-header"><h2 data-i18n="修改密码">修改密码</h2></div>
-<div style="padding:20px">
-<div class="form-group" style="margin-bottom:16px"><label class="form-label" data-i18n="旧密码">旧密码</label><input type="password" id="oldPassword" class="form-input" autocomplete="current-password"></div>
-<div class="form-group" style="margin-bottom:16px"><label class="form-label" data-i18n="新密码">新密码</label><input type="password" id="newPassword" class="form-input" autocomplete="new-password"></div>
+<div class="card-header"><div><h2 data-i18n="登录用户名">登录用户名</h2><div class="card-sub" data-i18n="用于管理面板登录，不影响网关 Key">用于管理面板登录，不影响网关 Key</div></div></div>
+<div class="card-body">
+<div class="form-group"><label class="form-label" for="adminUsername" data-i18n="用户名">用户名</label>
+<input type="text" id="adminUsername" class="form-input mono" autocomplete="username" autocapitalize="off" spellcheck="false" data-i18n-ph="3-32 位字母、数字、点、下划线、短横线或 @">
+<div class="hint" style="margin-top:6px" data-i18n="3-32 位字母、数字、点、下划线、短横线或 @">3-32 位字母、数字、点、下划线、短横线或 @</div></div>
+<div class="form-group"><label class="form-label" for="usernamePassword" data-i18n="当前密码">当前密码</label>
+<input type="password" id="usernamePassword" class="form-input" autocomplete="current-password" data-i18n-ph="确认身份以保存修改">
+</div>
+<button class="btn btn-primary" onclick="changeUsername()" data-i18n="保存用户名">保存用户名</button>
+</div>
+</div>
+<div class="card">
+<div class="card-header"><div><h2 data-i18n="修改密码">修改密码</h2></div></div>
+<div class="card-body">
+<div class="form-group"><label class="form-label" for="oldPassword" data-i18n="旧密码">旧密码</label>
+<input type="password" id="oldPassword" class="form-input" autocomplete="current-password"></div>
+<div class="form-group"><label class="form-label" for="newPassword" data-i18n="新密码">新密码</label>
+<input type="password" id="newPassword" class="form-input" autocomplete="new-password"></div>
 <button class="btn btn-primary" onclick="changePassword()" data-i18n="修改密码">修改密码</button>
 </div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="网关 API Key（/v1 接口鉴权）">网关 API Key（/v1 接口鉴权）</h2></div>
-<div style="padding:20px">
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="当前 Key">当前 Key</label>
-<div style="display:flex;gap:8px"><input type="text" id="gatewayKeyDisplay" class="form-input" readonly data-i18n-ph="尚未生成" placeholder="尚未生成"><button class="btn btn-secondary" onclick="copyGatewayKey()" data-i18n="复制">复制</button></div>
+<div class="card-header"><div><h2 data-i18n="网关 API Key（/v1 接口鉴权）">网关 API Key（/v1 接口鉴权）</h2></div></div>
+<div class="card-body">
+<div class="form-group">
+<label class="form-label" for="gatewayKeyDisplay" data-i18n="当前 Key">当前 Key</label>
+<div style="display:flex;gap:8px"><input type="text" id="gatewayKeyDisplay" class="form-input mono" readonly data-i18n-ph="尚未生成" placeholder="尚未生成"><button class="btn btn-secondary" onclick="copyGatewayKey()" data-i18n="复制">复制</button></div>
 </div>
 <button class="btn btn-warning" onclick="generateAPIKey()" data-i18n="重新生成">重新生成</button>
-<div class="hint" style="margin-top:10px" data-i18n="客户端配置：base_url=http://127.0.0.1:8687/v1，api-key 填此 Key">客户端配置：base_url=http://127.0.0.1:8687/v1，api-key 填此 Key</div>
+<div class="hint" style="margin-top:10px" data-i18n="客户端配置：base_url 指向本服务 /v1，api-key 填此 Key">客户端配置：base_url 指向本服务 /v1，api-key 填此 Key</div>
 </div>
 </div>
 </div>
 </div>
 
-<div id="stab-strategy" style="display:none">
+<div id="stab-strategy" role="tabpanel" style="display:none">
 <div class="settings-grid">
 <div class="card">
-<div class="card-header"><h2 data-i18n="账号选择策略">账号选择策略</h2></div>
-<div style="padding:20px">
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="轮询策略">轮询策略</label>
+<div class="card-header"><div><h2 data-i18n="账号选择策略">账号选择策略</h2></div></div>
+<div class="card-body">
+<div class="form-group">
+<label class="form-label" for="setStrategy" data-i18n="轮询策略">轮询策略</label>
 <select id="setStrategy" class="form-input">
 <option value="round_robin" data-i18n="轮询（round_robin）">轮询（round_robin）</option>
 <option value="random" data-i18n="随机（random）">随机（random）</option>
@@ -275,42 +451,43 @@
 <option value="priority" data-i18n="优先级级联（priority：数值小者先用，耗尽自动落到下一层）">优先级级联（priority：数值小者先用，耗尽自动落到下一层）</option>
 </select>
 </div>
-<div class="form-group" style="margin-bottom:16px">
+<div class="form-group">
 <label class="form-label" data-i18n="会话粘滞">会话粘滞</label>
-<div><label style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="setSticky" style="width:auto" checked><span data-i18n="同一会话固定同一账号（保住上游 prompt 缓存，更省额度）">同一会话固定同一账号（保住上游 prompt 缓存，更省额度）</span></label></div>
+<label class="checkbox-row"><input type="checkbox" id="setSticky" checked><span data-i18n="同一会话固定同一账号（保住上游 prompt 缓存，更省额度）">同一会话固定同一账号（保住上游 prompt 缓存，更省额度）</span></label>
 </div>
-<div class="form-group" style="margin-bottom:16px">
+<div class="form-group">
 <label class="form-label" data-i18n="系统提示词缓存断点">系统提示词缓存断点</label>
-<div><label style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="setPromptCacheBreakpoint" style="width:auto"><span data-i18n="在 system 末块标记 cache_control，命中上游提示缓存后按缓存价计费；上游不支持时可关闭">在 system 末块标记 cache_control，命中上游提示缓存后按缓存价计费；上游不支持时可关闭</span></label></div>
+<label class="checkbox-row"><input type="checkbox" id="setPromptCacheBreakpoint"><span data-i18n="在 system 末块标记 cache_control，命中上游提示缓存后按缓存价计费；上游不支持时可关闭">在 system 末块标记 cache_control，命中上游提示缓存后按缓存价计费；上游不支持时可关闭</span></label>
 </div>
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="额度自动刷新间隔（秒，0=关闭）">额度自动刷新间隔（秒，0=关闭）</label>
+<div class="form-group">
+<label class="form-label" for="setQuotaInterval" data-i18n="额度自动刷新间隔（秒，0=关闭）">额度自动刷新间隔（秒，0=关闭）</label>
 <input type="number" id="setQuotaInterval" class="form-input" min="0" max="86400">
 </div>
-<div class="form-group" style="margin-bottom:16px">
+<div class="form-group">
 <label class="form-label" data-i18n="自动领取免费活动（默认开启）">自动领取免费活动（默认开启）</label>
-<div><label style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="setAutoClaimPromos" style="width:auto" checked><span data-i18n="开启后：后台定时检测并领取所有账号可领的免费活动（含验证码求解）；自动覆盖每个启用且凭证有效的账号，无需单独配置">开启后：后台定时检测并领取所有账号可领的免费活动（含验证码求解）；自动覆盖每个启用且凭证有效的账号，无需单独配置</span></label></div>
-<div style="display:flex;gap:16px;margin-top:8px;flex-wrap:wrap">
-<div style="flex:1;min-width:180px"><label class="form-label" style="font-size:12px" data-i18n="领取间隔（分钟，5-1440，0=仅手动）">领取间隔（分钟，5-1440，0=仅手动）</label><input type="number" id="setAutoClaimInterval" class="form-input" min="0" max="1440" placeholder="30"></div>
-<div style="flex:1;min-width:180px"><label class="form-label" style="font-size:12px" data-i18n="账号间延迟（秒，防风控）">账号间延迟（秒，防风控）</label><input type="number" id="setAutoClaimDelay" class="form-input" min="0" max="600" placeholder="10"></div>
+<label class="checkbox-row"><input type="checkbox" id="setAutoClaimPromos" checked><span data-i18n="开启后：后台定时检测并领取所有账号可领的免费活动（含验证码求解）；自动覆盖每个启用且凭证有效的账号，无需单独配置">开启后：后台定时检测并领取所有账号可领的免费活动（含验证码求解）；自动覆盖每个启用且凭证有效的账号，无需单独配置</span></label>
+<div class="llm-row" style="margin-top:10px">
+<div><label class="form-label" for="setAutoClaimInterval" style="font-size:11.5px" data-i18n="领取间隔（分钟，5-1440，0=仅手动）">领取间隔（分钟，5-1440，0=仅手动）</label><input type="number" id="setAutoClaimInterval" class="form-input" min="0" max="1440" placeholder="30"></div>
+<div><label class="form-label" for="setAutoClaimDelay" style="font-size:11.5px" data-i18n="账号间延迟（秒，防风控）">账号间延迟（秒，防风控）</label><input type="number" id="setAutoClaimDelay" class="form-input" min="0" max="600" placeholder="10"></div>
 </div>
 </div>
-<div class="form-group" style="margin-bottom:16px">
+<div class="form-group">
 <label class="form-label" data-i18n="自动重置（耗尽时按阈值消耗重置机会）">自动重置（耗尽时按阈值消耗重置机会）</label>
-<div><label style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="setAutoReset" style="width:auto"><span data-i18n="开启后：配额耗尽且自然重置等待超过阈值时自动消耗重置机会；默认关闭，重置仍可随时手动触发">开启后：配额耗尽且自然重置等待超过阈值时自动消耗重置机会；默认关闭，重置仍可随时手动触发</span></label></div>
-<div style="margin-top:6px"><label style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="setAutoResetExpiry" style="width:auto"><span data-i18n="临期自动消耗（默认关闭）：重置机会距到期不足消耗窗口时自动花掉，避免槽位作废；独立于上面的自动重置开关">临期自动消耗（默认关闭）：重置机会距到期不足消耗窗口时自动花掉，避免槽位作废；独立于上面的自动重置开关</span></label></div>
-<div style="display:flex;gap:16px;margin-top:8px;flex-wrap:wrap">
-<div style="flex:1;min-width:180px"><label class="form-label" style="font-size:12px" data-i18n="5小时窗口阈值（分钟）：自然重置等待小于该值不消耗重置">5小时窗口阈值（分钟）：自然重置等待小于该值不消耗重置</label><input type="number" id="setAutoResetMinWait5h" class="form-input" min="0" max="300" placeholder="60"></div>
-<div style="flex:1;min-width:180px"><label class="form-label" style="font-size:12px" data-i18n="周窗口阈值（小时）：自然重置等待小于该值不消耗重置">周窗口阈值（小时）：自然重置等待小于该值不消耗重置</label><input type="number" id="setAutoResetMinWaitWeek" class="form-input" min="0" max="168" placeholder="24"></div>
-<div style="flex:1;min-width:180px"><label class="form-label" style="font-size:12px" data-i18n="临期消耗窗口（分钟）：重置机会距到期不足该窗口时自动消耗，避免槽位作废；0=关闭">临期消耗窗口（分钟）：重置机会距到期不足该窗口时自动消耗，避免槽位作废；0=关闭</label><input type="number" id="setAutoResetExpirySpend" class="form-input" min="0" max="1440" placeholder="60"></div>
+<label class="checkbox-row"><input type="checkbox" id="setAutoReset"><span data-i18n="开启后：配额耗尽且自然重置等待超过阈值时自动消耗重置机会；默认关闭，重置仍可随时手动触发">开启后：配额耗尽且自然重置等待超过阈值时自动消耗重置机会；默认关闭，重置仍可随时手动触发</span></label>
+<div style="margin-top:8px"><label class="checkbox-row"><input type="checkbox" id="setAutoResetExpiry"><span data-i18n="临期自动消耗（默认关闭）：重置机会距到期不足消耗窗口时自动花掉，避免槽位作废；独立于上面的自动重置开关">临期自动消耗（默认关闭）：重置机会距到期不足消耗窗口时自动花掉，避免槽位作废；独立于上面的自动重置开关</span></label></div>
+<div class="llm-row" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
+<div><label class="form-label" for="setAutoResetMinWait5h" style="font-size:11.5px" data-i18n="5小时窗口阈值（分钟）">5小时窗口阈值（分钟）</label><input type="number" id="setAutoResetMinWait5h" class="form-input" min="0" max="300" placeholder="60"></div>
+<div><label class="form-label" for="setAutoResetMinWaitWeek" style="font-size:11.5px" data-i18n="周窗口阈值（小时）">周窗口阈值（小时）</label><input type="number" id="setAutoResetMinWaitWeek" class="form-input" min="0" max="168" placeholder="24"></div>
+<div><label class="form-label" for="setAutoResetExpirySpend" style="font-size:11.5px" data-i18n="临期消耗窗口（分钟，0=关闭）">临期消耗窗口（分钟，0=关闭）</label><input type="number" id="setAutoResetExpirySpend" class="form-input" min="0" max="1440" placeholder="60"></div>
 </div>
 </div>
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="每账号并发上限（1-32，默认 3；排队而非打满并发触发 1302 限流）">每账号并发上限（1-32，默认 3；排队而非打满并发触发 1302 限流）</label>
+<div class="form-group">
+<label class="form-label" for="setMaxConcurrent" data-i18n="每账号并发上限（1-32，默认 3）">每账号并发上限（1-32，默认 3）</label>
 <input type="number" id="setMaxConcurrent" class="form-input" min="1" max="32">
+<div class="hint" style="margin-top:6px" data-i18n="排队而非打满并发触发 1302 限流">排队而非打满并发触发 1302 限流</div>
 </div>
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="付费通道回退（免费受限时无缝切到按量计费）">付费通道回退（免费受限时无缝切到按量计费）</label>
+<div class="form-group">
+<label class="form-label" for="setPaidFallback" data-i18n="付费通道回退（免费受限时无缝切到按量计费）">付费通道回退（免费受限时无缝切到按量计费）</label>
 <select id="setPaidFallback" class="form-input">
 <option value="free_first" data-i18n="免费优先，受限后回退付费（推荐）">免费优先，受限后回退付费（推荐）</option>
 <option value="balanced" data-i18n="均衡：同账号免费失败立刻试其付费通道">均衡：同账号免费失败立刻试其付费通道</option>
@@ -318,43 +495,45 @@
 </select>
 <div class="hint" style="margin-top:6px" data-i18n="免费通道 = Coding Plan JWT（套餐额度）；付费通道 = api.z.ai API Key（按量计费）。免费侧并发满 / 限流 / 额度耗尽 / 风控均触发回退；各账号独立开关见账号列表。">免费通道 = Coding Plan JWT（套餐额度）；付费通道 = api.z.ai API Key（按量计费）。免费侧并发满 / 限流 / 额度耗尽 / 风控均触发回退；各账号独立开关见账号列表。</div>
 </div>
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="付费通道每日 token 上限（0=不限制；超过后当日不再回退付费）">付费通道每日 token 上限（0=不限制；超过后当日不再回退付费）</label>
+<div class="form-group">
+<label class="form-label" for="setPaidCap" data-i18n="付费通道每日 token 上限（0=不限制）">付费通道每日 token 上限（0=不限制）</label>
 <input type="number" id="setPaidCap" class="form-input" min="0" placeholder="0">
 </div>
 <button class="btn btn-primary" onclick="saveStrategySettings()" data-i18n="保存策略">保存策略</button>
 </div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="状态机说明">状态机说明</h2></div>
-<div style="padding:20px;font-size:13px;color:var(--c-text-light);line-height:2">
+<div class="card-header"><div><h2 data-i18n="状态机说明">状态机说明</h2></div></div>
+<div class="card-body">
+<div class="badge-row">
 <div><span class="badge badge-success">active</span> <span data-i18n="正常，参与轮询">正常，参与轮询</span></div>
 <div><span class="badge badge-warning">cooling</span> <span data-i18n="限流/风控冷却，到期自动恢复">限流/风控冷却，到期自动恢复</span></div>
 <div><span class="badge badge-danger">exhausted</span> <span data-i18n="额度用完，额度刷新后恢复">额度用完，额度刷新后恢复</span></div>
 <div><span class="badge badge-danger">invalid</span> <span data-i18n="凭证失效（401/403），需重新登录">凭证失效（401/403），需重新登录</span></div>
 <div><span class="badge badge-info">inactive</span> <span data-i18n="套餐未激活，可尝试「激活套餐」">套餐未激活，可尝试「激活套餐」</span></div>
 <div><span class="badge badge-secondary">disabled</span> <span data-i18n="手动禁用">手动禁用</span></div>
-<div style="margin-top:8px"><span class="badge badge-purple">paid</span> <span data-i18n="付费通道冷却/余额不足（独立计时，不影响免费通道；到期自动恢复）">付费通道冷却/余额不足（独立计时，不影响免费通道；到期自动恢复）</span></div>
+<div><span class="badge badge-purple">paid</span> <span data-i18n="付费通道冷却/余额不足（独立计时，不影响免费通道；到期自动恢复）">付费通道冷却/余额不足（独立计时，不影响免费通道；到期自动恢复）</span></div>
+</div>
 </div>
 </div>
 </div>
 </div>
 
-<div id="stab-proxy" style="display:none">
+<div id="stab-proxy" role="tabpanel" style="display:none">
 <div class="card">
-<div class="card-header"><h2 data-i18n="出口代理节点（组绑定）">出口代理节点（组绑定）</h2>
-<div style="display:flex;gap:8px">
+<div class="card-header"><div><h2 data-i18n="出口代理节点（组绑定）">出口代理节点（组绑定）</h2></div>
+<div class="header-actions">
 <button class="btn btn-sm btn-secondary" onclick="probeProxyPorts()" data-i18n="探测本机端口">探测本机端口</button>
 <button class="btn btn-sm btn-secondary" onclick="detectSystemProxy()" data-i18n="读取系统代理">读取系统代理</button>
 <button class="btn btn-sm btn-primary" onclick="showProxyModal()" data-i18n="+ 添加节点">+ 添加节点</button>
 </div></div>
-<div id="proxyTable"><div class="empty"><p data-i18n="暂无代理节点（未配置时全部直连）">暂无代理节点（未配置时全部直连）</p></div></div>
+<div id="proxyTable" class="card-body tight"><div class="empty"><p data-i18n="暂无代理节点（未配置时全部直连）">暂无代理节点（未配置时全部直连）</p></div></div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="全局上游代理（未绑定组的账号走这里）">全局上游代理（未绑定组的账号走这里）</h2></div>
-<div style="padding:20px">
+<div class="card-header"><div><h2 data-i18n="全局上游代理（未绑定组的账号走这里）">全局上游代理（未绑定组的账号走这里）</h2></div></div>
+<div class="card-body">
 <div style="display:flex;gap:8px;margin-bottom:10px">
-<input type="text" id="setGlobalProxy" class="form-input" data-i18n-ph="http://127.0.0.1:7897 或 socks5://host:port，留空直连" placeholder="http://127.0.0.1:7897 或 socks5://host:port，留空直连">
+<input type="text" id="setGlobalProxy" class="form-input mono" data-i18n-ph="http://127.0.0.1:7897 或 socks5://host:port，留空直连" placeholder="http://127.0.0.1:7897 或 socks5://host:port，留空直连">
 <button class="btn btn-primary" onclick="saveGlobalProxy()" data-i18n="保存">保存</button>
 <button class="btn btn-secondary" onclick="testGlobalProxy()" data-i18n="测试">测试</button>
 </div>
@@ -363,23 +542,23 @@
 </div>
 </div>
 
-<div id="stab-tls" style="display:none">
+<div id="stab-tls" role="tabpanel" style="display:none">
 <div class="settings-grid">
 <div class="card">
-<div class="card-header"><h2 data-i18n="TLS 指纹（ClientHello 伪装）">TLS 指纹（ClientHello 伪装）</h2></div>
-<div style="padding:20px">
-<div class="form-group" style="margin-bottom:16px"><label class="form-label" data-i18n="指纹模式">指纹模式</label>
+<div class="card-header"><div><h2 data-i18n="TLS 指纹（ClientHello 伪装）">TLS 指纹（ClientHello 伪装）</h2></div></div>
+<div class="card-body">
+<div class="form-group"><label class="form-label" for="setFingerprint" data-i18n="指纹模式">指纹模式</label>
 <select id="setFingerprint" class="form-input" onchange="fpModeChange()"></select>
 <div class="hint" id="fpCurrentHint" style="margin-top:6px"></div></div>
-<div class="form-group" id="ja3Wrap" style="display:none;margin-bottom:16px"><label class="form-label" data-i18n="自定义 JA3 字符串">自定义 JA3 字符串</label>
+<div class="form-group" id="ja3Wrap" style="display:none"><label class="form-label" for="setCustomJA3" data-i18n="自定义 JA3 字符串">自定义 JA3 字符串</label>
 <input type="text" id="setCustomJA3" class="form-input mono" placeholder="771,4865-4866-4867-...,0-23-65281-...,29-23-24,0"></div>
 <button class="btn btn-primary" onclick="saveFingerprint()" data-i18n="保存指纹设置">保存指纹设置</button>
 <div class="hint" style="margin-top:12px" data-i18n="上游阿里云 ESA WAF 会检查 TLS ClientHello 指纹（JA3）。ZCode 桌面端是 Electron/Chromium，默认 Chrome 伪装与其一致；被风控时可换 firefox/随机化尝试。">上游阿里云 ESA WAF 会检查 TLS ClientHello 指纹（JA3）。ZCode 桌面端是 Electron/Chromium，默认 Chrome 伪装与其一致；被风控时可换 firefox/随机化尝试。</div>
 </div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="说明">说明</h2></div>
-<div style="padding:20px;font-size:13px;color:var(--c-text-light);line-height:1.9">
+<div class="card-header"><div><h2 data-i18n="说明">说明</h2></div></div>
+<div class="card-body notes">
 <p data-i18n="· 指纹作用于所有上游请求（额度/活动/聊天转发）的 TLS 握手层。">· 指纹作用于所有上游请求（额度/活动/聊天转发）的 TLS 握手层。</p>
 <p data-i18n="· 自定义 JA3 为 5 段格式：版本,密码套件,扩展,椭圆曲线,点格式；未识别扩展会跳过。">· 自定义 JA3 为 5 段格式：版本,密码套件,扩展,椭圆曲线,点格式；未识别扩展会跳过。</p>
 <p data-i18n="· HTTP/2 已禁用（ESA WAF 不支持 h2 ALPN），与桌面客户端实测行为一致。">· HTTP/2 已禁用（ESA WAF 不支持 h2 ALPN），与桌面客户端实测行为一致。</p>
@@ -388,13 +567,13 @@
 </div>
 </div>
 
-<div id="stab-captcha" style="display:none">
+<div id="stab-captcha" role="tabpanel" style="display:none">
 <div class="settings-grid">
 <div class="card">
-<div class="card-header"><h2 data-i18n="人机验证（阿里云无痕）">人机验证（阿里云无痕）</h2></div>
-<div style="padding:20px">
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="求解模式">求解模式</label>
+<div class="card-header"><div><h2 data-i18n="人机验证（阿里云无痕）">人机验证（阿里云无痕）</h2></div></div>
+<div class="card-body">
+<div class="form-group">
+<label class="form-label" for="setCaptchaMode" data-i18n="求解模式">求解模式</label>
 <select id="setCaptchaMode" class="form-input">
 <option value="auto" data-i18n="自动（无头浏览器求解，失败升级有头手动）">自动（无头浏览器求解，失败升级有头手动）</option>
 <option value="manual" data-i18n="手动（始终弹出浏览器窗口人工过）">手动（始终弹出浏览器窗口人工过）</option>
@@ -402,7 +581,7 @@
 </select>
 </div>
 <button class="btn btn-primary" onclick="saveCaptchaSettings()" data-i18n="保存">保存</button>
-<div style="margin-top:16px;display:flex;gap:8px">
+<div style="margin-top:14px;display:flex;gap:8px">
 <button class="btn btn-sm btn-secondary" onclick="solveCaptchaNow()" data-i18n="立即求解测试">立即求解测试</button>
 <button class="btn btn-sm btn-secondary" onclick="invalidateCaptcha()" data-i18n="失效缓存">失效缓存</button>
 </div>
@@ -410,8 +589,8 @@
 </div>
 </div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="说明">说明</h2></div>
-<div style="padding:20px;font-size:13px;color:var(--c-text-light);line-height:1.9">
+<div class="card-header"><div><h2 data-i18n="说明">说明</h2></div></div>
+<div class="card-body notes">
 <p data-i18n-html="· zcode.z.ai 免费额度通道需要 <b>X-Aliyun-Captcha-Verify-Param</b>，由本机真实 Chrome/Edge 无头求解（捆绑 Chromium 会被风控识别）。">· zcode.z.ai 免费额度通道需要 <b>X-Aliyun-Captcha-Verify-Param</b>，由本机真实 Chrome/Edge 无头求解（捆绑 Chromium 会被风控识别）。</p>
 <p data-i18n="· 参数缓存 45 秒，过期后 5 分钟宽限期内复用旧参数并后台刷新。">· 参数缓存 45 秒，过期后 5 分钟宽限期内复用旧参数并后台刷新。</p>
 <p data-i18n="· 数据中心 IP 会被风控（F001 环境风险），建议在「出口代理」配置住宅代理。">· 数据中心 IP 会被风控（F001 环境风险），建议在「出口代理」配置住宅代理。</p>
@@ -421,17 +600,17 @@
 </div>
 </div>
 
-<div id="stab-models" style="display:none">
+<div id="stab-models" role="tabpanel" style="display:none">
 <div class="card">
-<div class="card-header"><h2 data-i18n="网关公布模型（/v1/models）">网关公布模型（/v1/models）</h2></div>
-<div style="padding:20px">
-<div class="form-group" style="margin-bottom:16px">
-<label class="form-label" data-i18n="模型清单（逗号分隔，留空使用 config/config.json）">模型清单（逗号分隔，留空使用 config/config.json）</label>
-<input type="text" id="setGatewayModels" class="form-input" placeholder="GLM-5.3,GLM-5.2,GLM-4.7,...">
+<div class="card-header"><div><h2 data-i18n="网关公布模型（/v1/models）">网关公布模型（/v1/models）</h2></div></div>
+<div class="card-body">
+<div class="form-group">
+<label class="form-label" for="setGatewayModels" data-i18n="模型清单（逗号分隔，留空使用 config/config.json）">模型清单（逗号分隔，留空使用 config/config.json）</label>
+<input type="text" id="setGatewayModels" class="form-input mono" placeholder="GLM-5.3,GLM-5.2,GLM-4.7,...">
 </div>
 <button class="btn btn-primary" onclick="saveModelsSettings()" data-i18n="保存">保存</button>
 <div class="hint" style="margin-top:12px"><span data-i18n="当前生效: ">当前生效: </span><span id="currentModels"></span></div>
-<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">
+<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
 <button class="btn btn-sm btn-secondary" onclick="syncModelCatalog()" data-i18n="同步官方目录（client/configs）">同步官方目录（client/configs）</button>
 <button class="btn btn-sm btn-secondary" onclick="applyCatalogToGateway()" data-i18n="应用目录到网关清单">应用目录到网关清单</button>
 </div>
@@ -443,22 +622,30 @@
 
 <!-- API 文档 -->
 <div class="section" id="section-docs">
+<div class="page-head">
+<div>
+<h1 data-i18n="API 文档">API 文档</h1>
+<p class="page-desc" data-i18n="把网关接到任意 OpenAI / Anthropic 兼容客户端">把网关接到任意 OpenAI / Anthropic 兼容客户端</p>
+</div>
+</div>
 <div class="card">
-<div class="card-header"><h2 data-i18n="2API 端点">2API 端点</h2></div>
-<div style="padding:20px;font-size:13px;line-height:2">
+<div class="card-header"><div><h2 data-i18n="2API 端点">2API 端点</h2></div></div>
+<div class="card-body docs-content">
 <p data-i18n-html="鉴权：<code>Authorization: Bearer sk-xxx</code> 或 <code>x-api-key: sk-xxx</code>（在「设置 → 账号安全」生成）">鉴权：<code>Authorization: Bearer sk-xxx</code> 或 <code>x-api-key: sk-xxx</code>（在「设置 → 账号安全」生成）</p>
+<div class="table-wrap" style="margin-top:12px">
 <table class="data-table">
 <thead><tr><th data-i18n="端点">端点</th><th data-i18n="协议">协议</th><th data-i18n="说明">说明</th></tr></thead>
 <tbody>
-<tr><td><code>POST /v1/messages</code></td><td>Anthropic Messages</td><td data-i18n="原生协议直通，支持 SSE 流式">原生协议直通，支持 SSE 流式</td></tr>
-<tr><td><code>POST /v1/chat/completions</code></td><td>OpenAI Chat</td><td data-i18n="自动转换为 Anthropic 上游请求，支持 tools / 流式 / include_usage">自动转换为 Anthropic 上游请求，支持 tools / 流式 / include_usage</td></tr>
-<tr><td><code>POST /v1/responses</code></td><td>OpenAI Responses</td><td data-i18n="Codex / 新版 OpenAI SDK 兼容，含 function_call 事件流">Codex / 新版 OpenAI SDK 兼容，含 function_call 事件流</td></tr>
-<tr><td><code>GET /v1/models</code></td><td data-i18n="通用">通用</td><td data-i18n="模型清单（同时带 OpenAI 与 Anthropic 字段）">模型清单（同时带 OpenAI 与 Anthropic 字段）</td></tr>
+<tr><td class="no-truncate"><code>POST /v1/messages</code></td><td class="no-truncate">Anthropic Messages</td><td class="no-truncate" data-i18n="原生协议直通，支持 SSE 流式">原生协议直通，支持 SSE 流式</td></tr>
+<tr><td class="no-truncate"><code>POST /v1/chat/completions</code></td><td class="no-truncate">OpenAI Chat</td><td class="no-truncate" data-i18n="自动转换为 Anthropic 上游请求，支持 tools / 流式 / include_usage">自动转换为 Anthropic 上游请求，支持 tools / 流式 / include_usage</td></tr>
+<tr><td class="no-truncate"><code>POST /v1/responses</code></td><td class="no-truncate">OpenAI Responses</td><td class="no-truncate" data-i18n="Codex / 新版 OpenAI SDK 兼容，含 function_call 事件流">Codex / 新版 OpenAI SDK 兼容，含 function_call 事件流</td></tr>
+<tr><td class="no-truncate"><code>GET /v1/models</code></td><td class="no-truncate" data-i18n="通用">通用</td><td class="no-truncate" data-i18n="模型清单（同时带 OpenAI 与 Anthropic 字段）">模型清单（同时带 OpenAI 与 Anthropic 字段）</td></tr>
 </tbody>
 </table>
-<p style="margin-top:12px" data-i18n-html="可选请求头：<code>x-zcode-group: 组名</code> 限定只用某分组的账号。">可选请求头：<code>x-zcode-group: 组名</code> 限定只用某分组的账号。</p>
+</div>
+<p style="margin-top:14px" data-i18n-html="可选请求头：<code>x-zcode-group: 组名</code> 限定只用某分组的账号。">可选请求头：<code>x-zcode-group: 组名</code> 限定只用某分组的账号。</p>
 <p data-i18n-html="模型名大小写不敏感（glm-5.3 → GLM-5.3），支持 <code>bigmodel/</code> 前缀路由到 BigModel 通道。">模型名大小写不敏感（glm-5.3 → GLM-5.3），支持 <code>bigmodel/</code> 前缀路由到 BigModel 通道。</p>
-<h3 style="margin:16px 0 8px;font-size:14px" data-i18n="curl 示例">curl 示例</h3>
+<h3 data-i18n="curl 示例">curl 示例</h3>
 <pre class="code-block" data-i18n="curl http://127.0.0.1:8687/v1/chat/completions \
   -H &quot;Authorization: Bearer sk-你的KEY&quot; \
   -H &quot;Content-Type: application/json&quot; \
@@ -472,12 +659,12 @@
 
 </main>
 </div>
-
-<!-- 模态框容器 -->
-<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
-<div class="modal" id="modalBox"></div>
 </div>
-<div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+<div class="modal" id="modalBox" role="dialog" aria-modal="true"></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="/web/static/i18n.js"></script>
 <script src="/web/static/app.js"></script>

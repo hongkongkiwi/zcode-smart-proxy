@@ -663,6 +663,57 @@ const I18N_EN = {
   '多': 'More',
   '365 天活动': '365-day activity',
   '趋势/热力图加载失败：%s': 'Failed to load trends/heatmap: %s',
+
+  // 新界面：外壳与导航
+  '跳到主内容': 'Skip to main content',
+  '概览': 'Overview',
+  '凭据': 'Credentials',
+  '运维': 'Operations',
+  '系统': 'System',
+  '主导航': 'Primary navigation',
+  '打开菜单': 'Open menu',
+  '关闭菜单': 'Close menu',
+  '切换主题': 'Toggle theme',
+  '语言 / Language': 'Language',
+  '网关 Key': 'Gateway keys',
+  '管理员': 'Administrator',
+  '账号与安全': 'Account & security',
+  '设置分区': 'Settings sections',
+
+  // 新界面：页面说明
+  '账号、额度与近七日活动概览': 'Accounts, quota and the last seven days at a glance',
+  '导入上游账号、查看额度与状态，按分组调度': 'Import upstream accounts, inspect quota and status, dispatch by group',
+  '发给客户端的 /v1 鉴权凭据，可按 Key 限制速率、额度与模型': 'Credentials your clients send to /v1; rate, quota and model limits apply per key',
+  '定时领取免费额度、自动重置与运行记录': 'Scheduled free-credit claims, automatic resets and run history',
+  '请求、Token 与延迟的逐条明细和聚合统计': 'Per-request detail plus aggregate request, token and latency statistics',
+  '用网关 Key 直接打一次请求，验证链路上游是否健康': 'Send one request with a gateway key to check the upstream path',
+  '账号安全、调度策略、出口代理与上游伪装': 'Account security, scheduling strategy, egress proxies and upstream disguise',
+  '把网关接到任意 OpenAI / Anthropic 兼容客户端': 'Point any OpenAI- or Anthropic-compatible client at this gateway',
+
+  // 新界面：用户名与表单
+  '登录用户名': 'Login username',
+  '用于管理面板登录，不影响网关 Key': 'Used for panel sign-in; gateway keys are unaffected',
+  '当前密码': 'Current password',
+  '保存用户名': 'Save username',
+  '用户名已更新': 'Username updated',
+  '请输入用户名': 'Enter a username',
+  '确认身份以保存修改': 'Confirm your identity to save changes',
+  '3-32 位字母、数字、点、下划线、短横线或 @': '3-32 characters: letters, digits, dot, underscore, dash or @',
+  '初始密码见服务端首次启动日志，或由 ZCODE_WEB_PASS 指定':
+    'The initial password is written to the server log on first start, or set ZCODE_WEB_PASS',
+  '客户端配置：base_url 指向本服务 /v1，api-key 填此 Key':
+    'Client setup: point base_url at this service /v1 and use this key as api-key',
+  '每账号并发上限（1-32，默认 3）': 'Per-account concurrency limit (1-32, default 3)',
+  '5小时窗口阈值（分钟）': '5-hour window threshold (minutes)',
+  '周窗口阈值（小时）': 'Weekly window threshold (hours)',
+  '临期消耗窗口（分钟，0=关闭）': 'Expiry-spend window (minutes, 0 = off)',
+  '付费通道每日 token 上限（0=不限制）': 'Paid-channel daily token cap (0 = unlimited)',
+  '排队而非打满并发触发 1302 限流': 'Queueing instead of saturating concurrency, which trips 1302 rate limits',
+  '已设置 · 点「显示 Key」查看': 'Set · click "Show key" to view',
+  '每日请求数': 'Requests per day',
+  '近 %s 天': 'last %s days',
+  '峰值 %s': 'peak %s',
+  '统计（按 Key、按天、按小时、365 天）': 'Statistics (per key, per day, per hour, 365 days)',
 };
 
 // ---- 启动：解析语言并应用到静态 DOM（脚本位于 body 末尾，DOM 已就绪） ----

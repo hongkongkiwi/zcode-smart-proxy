@@ -161,3 +161,6 @@ func (db *DB) GetAdminUser() (string, error) {
 	}
 	return u, nil
 }
+
+// SetAdminUser writes the panel login name; Login compares against this value.
+func (db *DB) SetAdminUser(u string) error { return db.SetSetting("admin_user", u) }

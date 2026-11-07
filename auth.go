@@ -700,6 +700,73 @@ func (am *AuthManager) HandleChangePassword(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"message": "password changed, please re-login"})
 }
 
+// validAdminUsername 限制为 ASCII 标识符字符：用户名参与登录比对与日志，
+// 放行任意 Unicode 会让等宽/不可见字符进入运维日志与登录表单。
+func validAdminUsername(s string) bool {
+	if len(s) < 3 || len(s) > 32 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-', r == '@':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// HandleChangeUsername POST /api/auth/username
+// Same threat model as the password change: the endpoint takes the current
+// password and, on success, controls the login identity, so it shares the
+// exponential backoff instead of allowing an unthrottled password oracle.
+func (am *AuthManager) HandleChangeUsername(w http.ResponseWriter, r *http.Request) {
+	if am.db == nil {
+		writeAPIError(w, http.StatusNotImplemented, "username change requires a database")
+		return
+	}
+	var body struct {
+		NewUsername     string `json:"new_username"`
+		CurrentPassword string `json:"current_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := strings.TrimSpace(body.NewUsername)
+	if !validAdminUsername(name) {
+		writeAPIError(w, http.StatusBadRequest,
+			"username must be 3-32 characters of letters, digits, dot, underscore, dash or @")
+		return
+	}
+	rateKey := clientIP(r) + "|username-change"
+	if wait := am.checkLoginRate(rateKey); wait > 0 {
+		writeAPIError(w, http.StatusTooManyRequests,
+			fmt.Sprintf("尝试过于频繁，请 %d 秒后再试", int(wait.Seconds())+1))
+		return
+	}
+	if !am.verifyPassword(body.CurrentPassword) {
+		am.recordLoginFail(rateKey)
+		writeAPIError(w, http.StatusUnauthorized, "current password incorrect")
+		return
+	}
+	am.clearLoginFail(rateKey)
+	if err := am.db.SetAdminUser(name); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "failed to save username")
+		return
+	}
+	// Sessions carry the display name; rename them in place so the panel header
+	// reflects the change without forcing every device to log in again.
+	am.mu.Lock()
+	for _, s := range am.sessions {
+		s.username = name
+	}
+	am.mu.Unlock()
+	log.Printf("[auth] admin username changed to %s", name)
+	writeJSON(w, http.StatusOK, map[string]string{"username": name, "message": "username updated"})
+}
+
 // HandleGetAPIKey GET /api/settings/api-key
 // 只回存在性与脱敏形状，绝不回明文：GET 端点仅凭 session 即可访问，
 // 明文返回等于 stolen session（XSS/失窃 cookie）直接拿走根 Key。

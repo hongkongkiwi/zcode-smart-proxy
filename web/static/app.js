@@ -112,10 +112,21 @@ function showLogin() {
 }
 function showApp(username) {
   document.getElementById('loginPage').style.display = 'none';
-  document.getElementById('mainApp').style.display = 'block';
-  document.getElementById('welcomeUser').textContent = username || 'admin';
-  document.getElementById('userAvatar').textContent = (username || 'A')[0].toUpperCase();
+  // The shell is a CSS grid; inline display must match or the sidebar collapses.
+  document.getElementById('mainApp').style.display = 'grid';
+  setDisplayedUser(username || 'admin');
+  updatePageTitle(); // initial section is dashboard; label may already be translated
   loadAll();
+}
+
+// setDisplayedUser keeps the topbar avatar, name and user menu in sync.
+function setDisplayedUser(name) {
+  const welcome = document.getElementById('welcomeUser');
+  if (welcome) welcome.textContent = name;
+  const menuName = document.getElementById('menuUserName');
+  if (menuName) menuName.textContent = name;
+  const avatar = document.getElementById('userAvatar');
+  if (avatar) avatar.textContent = (name || 'A').charAt(0).toUpperCase();
 }
 
 async function doLogin() {
@@ -168,20 +179,78 @@ document.getElementById('loginPass').addEventListener('keydown', e => { if (e.ke
 
 // ---- 导航 ----
 
-document.querySelectorAll('.pill-nav .nav-link[data-section]').forEach(link => {
+document.querySelectorAll('.app-nav .nav-link[data-section]').forEach(link => {
   link.addEventListener('click', () => switchSection(link.dataset.section));
 });
 
+// updatePageTitle mirrors the active nav label into the topbar (and follows i18n)
+function updatePageTitle() {
+  const el = document.getElementById('pageTitle');
+  if (!el) return;
+  const active = document.querySelector('.app-nav .nav-link[data-section].active span');
+  if (active) el.textContent = active.textContent;
+}
+
+// toggleSidebar drives the mobile drawer; omitted argument flips it
+function toggleSidebar(open) {
+  const app = document.getElementById('mainApp');
+  if (!app) return;
+  if (open === undefined) app.classList.toggle('sidebar-open');
+  else app.classList.toggle('sidebar-open', !!open);
+}
+
 function switchSection(name) {
-  document.querySelectorAll('.pill-nav .nav-link').forEach(l => l.classList.toggle('active', l.dataset.section === name));
+  document.querySelectorAll('.app-nav .nav-link[data-section]').forEach(l => {
+    const on = l.dataset.section === name;
+    l.classList.toggle('active', on);
+    if (on) l.setAttribute('aria-current', 'page');
+    else l.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.section').forEach(s => s.classList.toggle('active', s.id === 'section-' + name));
+  updatePageTitle();
+  toggleSidebar(false);
   if (name === 'dashboard') loadDashboard();
   if (name === 'accounts') { loadGroups(); loadAccounts(); }
   if (name === 'keys') loadKeys();
   if (name === 'activity') { loadPlans(); loadClaimRecords(); loadPlanRuns(); }
   if (name === 'usage') { loadUsageStats(); loadUsageRecords(); }
   if (name === 'llmtest') { loadLlmKey(); initLlmPlaceholders(); }
-  if (name === 'settings') loadSettings();
+  if (name === 'settings') { loadSettings(); loadAdminProfile(); }
+}
+
+// toggleTheme flips the persisted theme; the pre-paint script reads the same key
+function toggleTheme() {
+  const root = document.documentElement;
+  const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  try { localStorage.setItem('zcode_theme', next); } catch (e) { /* private mode */ }
+}
+
+// loadAdminProfile fills the username field from the session's own identity
+async function loadAdminProfile() {
+  try {
+    const d = await api('/api/auth/check');
+    if (!d || !d.username) return;
+    setDisplayedUser(d.username);
+    const input = document.getElementById('adminUsername');
+    if (input && document.activeElement !== input) input.value = d.username;
+  } catch (e) { /* api() already routes 401 to the login screen */ }
+}
+
+async function changeUsername() {
+  const nameInput = document.getElementById('adminUsername');
+  const passInput = document.getElementById('usernamePassword');
+  const name = (nameInput && nameInput.value || '').trim();
+  if (!name) { toast(t('请输入用户名'), 'error'); return; }
+  try {
+    const r = await api('/api/auth/username', { method: 'POST', body: {
+      new_username: name,
+      current_password: passInput ? passInput.value : '',
+    }});
+    if (passInput) passInput.value = '';
+    setDisplayedUser((r && r.username) || name);
+    toast(t('用户名已更新'));
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function navMoreDo(btn, fn) {
@@ -190,7 +259,11 @@ function navMoreDo(btn, fn) {
 }
 
 function switchSettingsTab(tab) {
-  document.querySelectorAll('.sub-tab').forEach(el => el.classList.toggle('active', el.dataset.stab === tab));
+  document.querySelectorAll('.sub-tab').forEach(el => {
+    const on = el.dataset.stab === tab;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
   ['security', 'strategy', 'proxy', 'tls', 'captcha', 'models'].forEach(name => {
     const el = document.getElementById('stab-' + name);
     if (el) el.style.display = name === tab ? '' : 'none';
@@ -248,7 +321,7 @@ async function loadDashboard() {
         ${Object.entries(sc).map(([k, v]) => statusBadge(k) + ' <b style="margin-right:10px">' + v + '</b>').join('')}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${Object.entries(gc).map(([k, v]) => `<span class="pill-group">${esc(k)} · ${v}</span>`).join('')}
+        ${Object.entries(gc).map(([k, v]) => `<span class="pill-group">${esc(t(k))} · ${v}</span>`).join('')}
       </div>`;
 
     applyGatewayPausedUI(!!d.gateway_paused);
@@ -1127,17 +1200,22 @@ async function loadPlanRuns() {
 // ---- 使用记录 ----
 
 // dailySparkline 按天请求数的纯字符串 SVG 折线（无依赖；不足两个点不画）
+// 折线必须有可读的标题与量纲，否则只是一根没有含义的线。
 function sparklineSVG(vals) {
   if (!vals || vals.length < 2) return '';
   const max = Math.max(...vals, 1);
   const W = 560, H = 40;
   const step = W / (vals.length - 1);
   const pts = vals.map((v, i) => (i * step).toFixed(1) + ',' + (H - 4 - v / max * (H - 8)).toFixed(1)).join(' ');
-  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="max-width:100%;display:block"><defs><linearGradient id="sparkGrad" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#ec4899"/></linearGradient></defs><polyline points="${pts}" fill="none" stroke="url(#sparkGrad)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:40px;display:block"><defs><linearGradient id="sparkGrad" x1="0" y1="0" x2="1" y2="0"><stop stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs><polyline points="${pts}" fill="none" stroke="url(#sparkGrad)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 
 function dailySparkline(daily) {
-  return sparklineSVG((daily || []).map(d => Number(d.requests || 0)));
+  const vals = (daily || []).map(d => Number(d.requests || 0));
+  if (vals.length < 2) return '';
+  const peak = Math.max(...vals);
+  return `<div class="chart-caption"><span>${t('每日请求数')} · ${tf('近 %s 天', vals.length)}</span><span>${tf('峰值 %s', fmtNum(peak))}</span></div>`
+    + sparklineSVG(vals);
 }
 
 // renderHeatmap GitHub 风格 365 天活动热力图：7 行（星期）× ~53 列（周），
@@ -1164,14 +1242,15 @@ function renderHeatmap(days) {
     weeks[w][i % 7] = c;
   });
   const level = r => r <= 0 ? 0 : r < max * 0.25 ? 1 : r < max * 0.5 ? 2 : r < max * 0.75 ? 3 : 4;
-  const colors = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'];
+  // 色阶走 CSS 类而非内联色值，让热力图跟随浅/深主题
+  const colors = ['heat-0', 'heat-1', 'heat-2', 'heat-3', 'heat-4'];
   const size = 11, gap = 3, pad = 16;
   const W = pad + weeks.length * (size + gap) + 4, H = pad + 7 * (size + gap) + 4;
   let rects = '';
   weeks.forEach((week, w) => week.forEach((c, dow) => {
     if (!c) return;
     const lv = level(c.requests);
-    rects += `<rect x="${pad + w * (size + gap)}" y="${pad + dow * (size + gap)}" width="${size}" height="${size}" rx="2.5" fill="${colors[lv]}"><title>${c.key}: ${fmtNum(c.requests)} ${t('次请求')} · ${fmtNum(c.tokens)} tokens</title></rect>`;
+    rects += `<rect class="${colors[lv]}" x="${pad + w * (size + gap)}" y="${pad + dow * (size + gap)}" width="${size}" height="${size}" rx="2.5"><title>${c.key}: ${fmtNum(c.requests)} ${t('次请求')} · ${fmtNum(c.tokens)} tokens</title></rect>`;
   }));
   // 月份标签：每列首格的月份变化处标注
   let labels = '';
@@ -1187,7 +1266,7 @@ function renderHeatmap(days) {
   });
   return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="max-width:100%;display:block">${labels}${rects}</svg>
     <div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--c-text-lighter);margin-top:4px">${t('少')}
-    ${colors.map(c => `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c}"></span>`).join('')}
+    ${colors.map(c => `<span class="heat-swatch ${c}"></span>`).join('')}
     ${t('多')} · ${t('365 天活动')}</div>`;
 }
 
@@ -1434,7 +1513,8 @@ function applyKeyDisplay(inputId, hasKey, revealed) {
   const el = document.getElementById(inputId);
   if (!el) return;
   el.value = revealed || '';
-  el.placeholder = hasKey ? t('已设置（点「显示 Key」验证管理员密码后查看）') : t('尚未生成');
+  // The placeholder must fit the field; the full instruction lives in the card hint.
+  el.placeholder = hasKey ? t('已设置 · 点「显示 Key」查看') : t('尚未生成');
 }
 
 // ensureRevealKeyBtn 在只读输入框旁注入「显示 Key」按钮（index.html 静态结构不含
@@ -1449,6 +1529,8 @@ function ensureRevealKeyBtn(inputId, target) {
   btn.onclick = () => showRevealKeyModal(target);
   el.parentElement.appendChild(btn);
   if (typeof applyI18n === 'function') applyI18n();
+  // The topbar title mirrors the nav label, which applyI18n just rewrote
+  if (typeof updatePageTitle === 'function') updatePageTitle();
 }
 
 function showRevealKeyModal(target) {

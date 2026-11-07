@@ -44,6 +44,7 @@ func (s *APIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/logout", s.auth.HandleLogout)
 	mux.HandleFunc("GET /api/auth/check", s.auth.HandleCheckAuth)
 	mux.HandleFunc("POST /api/auth/password", s.auth.HandleChangePassword)
+	mux.HandleFunc("POST /api/auth/username", s.auth.HandleChangeUsername)
 	mux.HandleFunc("GET /api/settings/api-key", s.auth.HandleGetAPIKey)
 	mux.HandleFunc("POST /api/settings/api-key/reveal", s.auth.HandleRevealAPIKey)
 	mux.HandleFunc("POST /api/settings/api-key/generate", s.auth.HandleGenerateAPIKey)
