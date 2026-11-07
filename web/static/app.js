@@ -512,7 +512,12 @@ async function addPasskey() {
     }
     toast(t('passkey 已添加'));
     loadTwoFactor();
-  } catch (e) { toast(tf('添加失败：%s', e.message || ''), 'error'); }
+  } catch (e) {
+    toast(tf('添加失败：%s', e.message || ''), 'error');
+    // 清空并聚焦口令框：陈旧自动填充不应被原样重试
+    const pf = document.getElementById('passkeyPassword');
+    if (pf) { pf.value = ''; pf.focus(); }
+  }
 }
 
 async function deletePasskey(id) {
