@@ -790,6 +790,17 @@ const I18N_EN = {
   'Android OkHttp（11）': 'Android OkHttp (11)',
   '自定义 JA3 指纹': 'Custom JA3 fingerprint',
   '若账号已重命名，旧登录名 admin 不再有效，请使用当前用户名。': 'If the account was renamed, the old login name admin no longer works; use the current username.',
+  '恢复码同时适用于 passkey 和验证器，每个只能用一次；只显示这一次，请立即下载或复制保存。': 'These codes work for both your passkey and the authenticator, each once. They are shown only once, so download or copy them now.',
+  '复制恢复码': 'Copy codes',
+  '下载恢复码': 'Download codes',
+  '恢复码': 'Recovery codes',
+  '每个恢复码只能使用一次；适用于 passkey 与验证器（TOTP）。': 'Each code works once, for either the passkey or the authenticator (TOTP).',
+  '账号': 'Account',
+  '生成时间': 'Generated',
+  '没有可复制的恢复码': 'No recovery codes to copy',
+  '没有可下载的恢复码': 'No recovery codes to download',
+  '恢复码已下载': 'Recovery codes downloaded',
+  '已有一组恢复码（剩余 %s 个），继续沿用，不会重新生成。': 'A set of recovery codes already exists (%s left); it is reused, not regenerated.',
 };
 
 // ---- 启动：解析语言并应用到静态 DOM（脚本位于 body 末尾，DOM 已就绪） ----

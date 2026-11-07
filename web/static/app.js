@@ -505,11 +505,8 @@ async function addPasskey() {
     const done = await api('/api/auth/passkey/register/finish?ticket=' + encodeURIComponent(begin.ticket), { method: 'POST', body });
     document.getElementById('passkeyPassword').value = '';
     document.getElementById('passkeyLabel').value = '';
-    if (done && done.recovery_codes && done.recovery_codes.length) {
-      // 首次注册 passkey 时补发恢复码：设备丢失后的唯一回退路径
-      document.getElementById('totpRecoveryCodes').textContent = done.recovery_codes.join('\n');
-      document.getElementById('totpRecoveryBox').style.display = '';
-    }
+    // 首次注册 passkey 时补发恢复码：设备丢失后的唯一回退路径
+    showRecoveryResult(done && done.recovery_codes, done && done.recovery_remaining);
     toast(t('passkey 已添加'));
     loadTwoFactor();
   } catch (e) {
@@ -530,6 +527,45 @@ async function deletePasskey(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// ---- 恢复码：复制 / 下载 ----
+// 两种因素共用同一组码，导出时带上用途与账号，避免以后分不清是哪个系统的。
+
+function recoveryCodesText() {
+  const el = document.getElementById('totpRecoveryCodes');
+  const codes = (el && el.textContent || '').split('\n').map(x => x.trim()).filter(Boolean);
+  const user = (document.getElementById('welcomeUser') || {}).textContent || 'admin';
+  const header = [
+    'ZCode Proxy · ' + t('恢复码'),
+    t('每个恢复码只能使用一次；适用于 passkey 与验证器（TOTP）。'),
+    t('账号') + ': ' + user,
+    t('生成时间') + ': ' + new Date().toLocaleString(currentLocale()),
+    '',
+  ].join('\n');
+  return header + '\n' + codes.join('\n') + '\n';
+}
+
+function copyRecoveryCodes() {
+  const el = document.getElementById('totpRecoveryCodes');
+  if (!el || !el.textContent.trim()) { toast(t('没有可复制的恢复码'), 'error'); return; }
+  copyToClipboard(recoveryCodesText());
+}
+
+function downloadRecoveryCodes() {
+  const el = document.getElementById('totpRecoveryCodes');
+  if (!el || !el.textContent.trim()) { toast(t('没有可下载的恢复码'), 'error'); return; }
+  const day = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([recoveryCodesText()], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'zcode-recovery-codes-' + day + '.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  toast(t('恢复码已下载'));
+}
+
 async function startTOTPSetup() {
   try {
     const d = await api('/api/auth/totp/setup', { method: 'POST', body: {} });
@@ -539,6 +575,23 @@ async function startTOTPSetup() {
     document.getElementById('totpSetupBox').style.display = '';
     document.getElementById('totpCode').focus();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// showRecoveryResult 只有新生成时才展示明文；沿用旧码时说明剩余数量。
+function showRecoveryResult(codes, remaining) {
+  const box = document.getElementById('totpRecoveryBox');
+  const hint = document.getElementById('recoveryExistingHint');
+  if (codes && codes.length) {
+    document.getElementById('totpRecoveryCodes').textContent = codes.join('\n');
+    box.style.display = '';
+    if (hint) hint.style.display = 'none';
+    return;
+  }
+  box.style.display = 'none';
+  if (hint) {
+    hint.style.display = '';
+    hint.textContent = tf('已有一组恢复码（剩余 %s 个），继续沿用，不会重新生成。', remaining || 0);
+  }
 }
 
 async function enableTOTP() {
@@ -551,8 +604,7 @@ async function enableTOTP() {
     document.getElementById('totpSetupBox').style.display = 'none';
     document.getElementById('totpPassword').value = '';
     document.getElementById('totpCode').value = '';
-    document.getElementById('totpRecoveryCodes').textContent = (d.recovery_codes || []).join('\n');
-    document.getElementById('totpRecoveryBox').style.display = '';
+    showRecoveryResult(d.recovery_codes, d.recovery_remaining);
     toast(t('TOTP 已启用'));
     loadTwoFactor();
   } catch (e) {

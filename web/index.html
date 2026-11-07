@@ -460,9 +460,14 @@
 <button class="btn btn-primary" style="margin-top:10px" onclick="enableTOTP()" data-i18n="确认启用">确认启用</button>
 </div>
 <div id="totpRecoveryBox" style="display:none;margin-top:12px">
-<div class="warn-box" data-i18n="恢复码只显示这一次，请离线保存；每个只能用一次。">恢复码只显示这一次，请离线保存；每个只能用一次。</div>
+<div class="warn-box" data-i18n="恢复码同时适用于 passkey 和验证器，每个只能用一次；只显示这一次，请立即下载或复制保存。">恢复码同时适用于 passkey 和验证器，每个只能用一次；只显示这一次，请立即下载或复制保存。</div>
 <pre class="code-block" id="totpRecoveryCodes"></pre>
+<div class="recovery-actions">
+<button type="button" class="btn btn-sm btn-secondary" onclick="copyRecoveryCodes()" data-i18n="复制恢复码">复制恢复码</button>
+<button type="button" class="btn btn-sm btn-secondary" onclick="downloadRecoveryCodes()" data-i18n="下载恢复码">下载恢复码</button>
 </div>
+</div>
+<div class="hint" id="recoveryExistingHint" style="display:none;margin-top:10px"></div>
 <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
 <button class="btn btn-secondary btn-sm" id="totpStartBtn" onclick="startTOTPSetup()" data-i18n="启用 TOTP">启用 TOTP</button>
 <button class="btn btn-secondary btn-sm" id="totpDisableBtn" onclick="disableTOTP()" data-i18n="停用 TOTP">停用 TOTP</button>

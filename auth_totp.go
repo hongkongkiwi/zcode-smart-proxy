@@ -387,10 +387,16 @@ func (am *AuthManager) HandleTOTPEnable(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusBadRequest, "invalid verification code")
 		return
 	}
-	codes, err := am.issueRecoveryCodes()
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "failed to store recovery codes")
-		return
+	// 恢复码是两种因素共用的一组。已有（例如先加了 passkey）就保留，
+	// 否则启用 TOTP 会静默作废用户已经离线保存的那一份。
+	var codes []string
+	if len(am.recoveryHashes()) == 0 {
+		var err error
+		codes, err = am.issueRecoveryCodes()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "failed to store recovery codes")
+			return
+		}
 	}
 	if err := am.db.SetSetting(totpSettingSecret, pending.secret); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "failed to store secret")
@@ -406,8 +412,9 @@ func (am *AuthManager) HandleTOTPEnable(w http.ResponseWriter, r *http.Request) 
 	am.clearLoginFail(rateKey)
 	log.Printf("[auth] 2FA enabled for user=%s", am.adminUser())
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"enabled":        true,
-		"recovery_codes": codes,
+		"enabled":            true,
+		"recovery_codes":     codes,
+		"recovery_remaining": len(am.recoveryHashes()),
 	})
 }
 

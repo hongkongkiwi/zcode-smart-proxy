@@ -267,6 +267,59 @@ func TestLoginTOTPRateLimited(t *testing.T) {
 	}
 }
 
+// TestReEnablingTOTPKeepsExistingRecoveryCodes 恢复码是两种因素共用的一组：
+// 先加 passkey 再启用 TOTP，不能把用户已经离线保存的那份静默作废。
+func TestReEnablingTOTPKeepsExistingRecoveryCodes(t *testing.T) {
+	am, db := newTOTPTestAuth(t)
+
+	enable := func() map[string]interface{} {
+		secret, err := totpGenerateSecret()
+		if err != nil {
+			t.Fatalf("secret: %v", err)
+		}
+		am.totpMu.Lock()
+		am.pendingTOTP = map[string]pendingTOTPSetup{am.adminUser(): {secret: secret, expiresAt: time.Now().Add(time.Minute)}}
+		am.totpMu.Unlock()
+
+		code, err := totpCodeAt(secret, time.Now())
+		if err != nil {
+			t.Fatalf("code: %v", err)
+		}
+		body, _ := json.Marshal(map[string]string{"code": code, "current_password": "test-password"})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/totp/enable", strings.NewReader(string(body)))
+		req.RemoteAddr = "198.51.100.7:2222"
+		am.HandleTOTPEnable(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("enable status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var out map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return out
+	}
+
+	first := enable()
+	codes, _ := first["recovery_codes"].([]interface{})
+	if len(codes) != recoveryCodeCount {
+		t.Fatalf("first enable issued %d codes, want %d", len(codes), recoveryCodeCount)
+	}
+	saved := codes[0].(string)
+
+	second := enable()
+	if rc, ok := second["recovery_codes"].([]interface{}); ok && len(rc) > 0 {
+		t.Fatalf("re-enable reissued %d codes; the saved set would be invalidated", len(rc))
+	}
+	if remaining, _ := second["recovery_remaining"].(float64); int(remaining) != recoveryCodeCount {
+		t.Fatalf("recovery_remaining = %v, want %d", second["recovery_remaining"], recoveryCodeCount)
+	}
+	if !am.consumeRecoveryCode(saved) {
+		t.Fatal("a code issued before re-enabling no longer works")
+	}
+	_ = db
+}
+
 // TestPasskeyUserHandleStable 改用户名不能让已注册 passkey 失效。
 func TestPasskeyUserHandleStable(t *testing.T) {
 	am, db := newTOTPTestAuth(t)
