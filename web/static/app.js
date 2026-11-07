@@ -13,6 +13,14 @@ function translateServerError(msg) {
     if (m) return 'Too many attempts, try again in ' + m[1] + 's';
     m = /^验证尝试过于频繁，请 (\d+) 秒后再试$/.exec(msg);
     if (m) return 'Too many verification attempts, try again in ' + m[1] + 's';
+    m = /^上游限流（HTTP (\d+)，model=([^）]+)）[,，]\s*冷却$/.exec(msg);
+    if (m) return 'Upstream rate limited (HTTP ' + m[1] + ', model=' + m[2] + '), cooling';
+    m = /^账号#(\d+): 人机校验求解失败: (.*)$/.exec(msg);
+    if (m) return 'Account #' + m[1] + ': captcha solve failed: ' + translateServerError(m[2]);
+    if (msg === '免费通道风控拦截（unusual activity）') return 'Free channel risk-blocked (unusual activity)';
+    if (msg === '所有账号均不可用或额度已用完，请在后台检查账号状态') return 'No account available or quota exhausted; check account status';
+    if (msg === '本地客户端导入') return 'imported from local client';
+    if (msg === '领取成功') return 'claim succeeded';
     return msg;
   }
   const zh = {
@@ -785,13 +793,13 @@ function renderAccounts() {
       <tr>
         <td><div style="font-weight:700">${esc(a.display_name || a.email || a.user_id)}</div>
             <div style="font-size:11px;color:var(--c-text-lighter)">${esc(a.email || '')}</div>
-            ${a.remark ? `<div style="font-size:11px;color:var(--c-text-lighter)">${tf('备注: %s', esc(a.remark))}</div>` : ''}</td>
+            ${a.remark ? `<div style="font-size:11px;color:var(--c-text-lighter)">${tf('备注: %s', esc(translateServerError(a.remark)))}</div>` : ''}</td>
         <td>${a.group ? `<span class="pill-group">${esc(a.group)}</span>` : '<span style="color:var(--c-text-lighter)">-</span>'}</td>
         <td><span class="badge ${a.auth_type === 'jwt' ? 'badge-info' : 'badge-purple'}">${a.auth_type === 'jwt' ? 'JWT' : 'API Key'}</span>
             ${a.has_api_key && a.auth_type === 'jwt' ? `<div style="font-size:10.5px;color:var(--c-text-lighter);margin-top:3px">${t('+APIKey回退')}${paidStateText(a)}</div>` : ''}</td>
         <td>${statusBadge(a.status)}${!a.enabled ? ` <span class="badge badge-secondary">${t('停用')}</span>` : ''}
-            ${a.last_error ? `<div style="font-size:10.5px;color:var(--c-danger);margin-top:3px;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${esc(a.last_error)}">${esc(a.last_error)}</div>` : ''}
-            ${a.paid_last_error ? `<div style="font-size:10.5px;color:var(--c-warning,var(--c-text-lighter));margin-top:2px;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${esc(a.paid_last_error)}">[${t('付费')}] ${esc(a.paid_last_error)}</div>` : ''}</td>
+            ${a.last_error ? `<div style="font-size:10.5px;color:var(--c-danger);margin-top:3px;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${esc(translateServerError(a.last_error))}">${esc(translateServerError(a.last_error))}</div>` : ''}
+            ${a.paid_last_error ? `<div style="font-size:10.5px;color:var(--c-warning,var(--c-text-lighter));margin-top:2px;max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${esc(translateServerError(a.paid_last_error))}">[${t('付费')}] ${esc(translateServerError(a.paid_last_error))}</div>` : ''}</td>
         <td style="min-width:190px;cursor:pointer" title="${t('点击查看套餐与额度构成')}" onclick="showQuotaModal(${a.id})">${quotaCell(a)}</td>
         <td><span class="mono" title="${esc(a.device_mid)}">${a.device_mid ? esc(a.device_mid.slice(0, 8)) + '…' : '-'}</span></td>
         <td>${a.use_count} / ${a.fail_count}<div style="font-size:10.5px;color:var(--c-text-lighter)">${fmtAgo(a.last_used_at)}</div></td>
@@ -1472,7 +1480,7 @@ async function loadClaimRecords() {
         <td><span class="badge badge-info">${esc(taskLabel(r.task_type))}</span></td>
         <td>${esc(r.plan_name || r.plan_id || '-')}</td>
         <td>${r.success ? `<span class="badge badge-success">${t('成功')}</span>` : `<span class="badge badge-danger">${t('失败')}</span>`}${r.code ? ` <span class="mono" style="font-size:11px">code=${r.code}</span>` : ''}</td>
-        <td style="max-width:280px" title="${esc(r.message)}">${esc(r.message || '')}</td>
+        <td style="max-width:280px" title="${esc(r.message)}">${esc(translateServerError(r.message || ''))}</td>
       </tr>`).join('')}</tbody></table></div>`;
   } catch (e) { reportLoadError(e); }
 }
@@ -1492,7 +1500,7 @@ async function loadPlanRuns() {
         <td>${r.status === 'success' ? `<span class="badge badge-success">${t('成功')}</span>` : `<span class="badge badge-danger">${t('失败')}</span>`}</td>
         <td>${r.success_count} / ${r.fail_count}</td>
         <td>${(r.duration_ms / 1000).toFixed(1)}s</td>
-        <td style="max-width:320px" title="${esc(r.message)}">${esc(r.message || '')}</td>
+        <td style="max-width:320px" title="${esc(r.message)}">${esc(translateServerError(r.message || ''))}</td>
       </tr>`).join('')}</tbody></table></div>`;
   } catch (e) { reportLoadError(e); }
 }
