@@ -273,7 +273,7 @@ func (am *AuthManager) HandlePasskeyRegisterBegin(w http.ResponseWriter, r *http
 	}
 	if !am.verifyPassword(body.CurrentPassword) {
 		am.recordLoginFail(rateKey)
-		writeAPIError(w, http.StatusUnauthorized, "current password incorrect")
+		writeAPIError(w, http.StatusForbidden, "current password incorrect")
 		return
 	}
 	wa, err := rpFor(r)
@@ -385,7 +385,7 @@ func (am *AuthManager) HandlePasskeyDelete(w http.ResponseWriter, r *http.Reques
 	}
 	if !am.verifyPassword(body.CurrentPassword) {
 		am.recordLoginFail(rateKey)
-		writeAPIError(w, http.StatusUnauthorized, "current password incorrect")
+		writeAPIError(w, http.StatusForbidden, "current password incorrect")
 		return
 	}
 	list := am.passkeys()

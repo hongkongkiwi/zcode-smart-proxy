@@ -380,7 +380,7 @@ func (am *AuthManager) HandleTOTPEnable(w http.ResponseWriter, r *http.Request) 
 	}
 	if !am.verifyPassword(body.CurrentPassword) {
 		am.recordLoginFail(rateKey)
-		writeAPIError(w, http.StatusUnauthorized, "current password incorrect")
+		writeAPIError(w, http.StatusForbidden, "current password incorrect")
 		return
 	}
 	if !totpValidate(pending.secret, body.Code, time.Now()) {
@@ -454,7 +454,7 @@ func (am *AuthManager) HandleTOTPDisable(w http.ResponseWriter, r *http.Request)
 	}
 	if !am.verifyPassword(body.CurrentPassword) {
 		am.recordLoginFail(rateKey)
-		writeAPIError(w, http.StatusUnauthorized, "current password incorrect")
+		writeAPIError(w, http.StatusForbidden, "current password incorrect")
 		return
 	}
 	secret := am.totpSecret()

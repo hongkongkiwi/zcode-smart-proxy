@@ -719,7 +719,7 @@ func (am *AuthManager) HandleChangePassword(w http.ResponseWriter, r *http.Reque
 	am.mu.RUnlock()
 	if !am.verifyPassword(body.OldPassword) {
 		am.recordLoginFail(rateKey)
-		writeAPIError(w, http.StatusUnauthorized, "old password incorrect")
+		writeAPIError(w, http.StatusForbidden, "old password incorrect")
 		return
 	}
 	hash, err := hashPassword(body.NewPassword)
@@ -800,7 +800,7 @@ func (am *AuthManager) HandleChangeUsername(w http.ResponseWriter, r *http.Reque
 	}
 	if !am.verifyPassword(body.CurrentPassword) {
 		am.recordLoginFail(rateKey)
-		writeAPIError(w, http.StatusUnauthorized, "current password incorrect")
+		writeAPIError(w, http.StatusForbidden, "current password incorrect")
 		return
 	}
 	am.clearLoginFail(rateKey)

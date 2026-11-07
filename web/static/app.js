@@ -3,6 +3,37 @@
 
 // ---- 基础设施 ----
 
+// translateServerError 让错误提示跟随界面语言：后端错误大多是英文，
+// 少数带计数的限速提示是中文，两种界面都不该混入另一种语言。
+function translateServerError(msg) {
+  if (!msg) return msg;
+  if (CURRENT_LANG === 'en') {
+    if (I18N_EN[msg] !== undefined) return I18N_EN[msg];
+    let m = /^尝试过于频繁，请 (\d+) 秒后再试$/.exec(msg);
+    if (m) return 'Too many attempts, try again in ' + m[1] + 's';
+    m = /^验证尝试过于频繁，请 (\d+) 秒后再试$/.exec(msg);
+    if (m) return 'Too many verification attempts, try again in ' + m[1] + 's';
+    return msg;
+  }
+  const zh = {
+    'invalid username or password': '用户名或密码错误',
+    'current password incorrect': '当前密码错误',
+    'old password incorrect': '旧密码错误',
+    'invalid verification code': '验证码不正确',
+    '2FA challenge expired, sign in again': '验证会话已过期，请重新登录',
+    'passkey verification failed': 'passkey 验证失败',
+    'challenge and code are required': '请输入验证码',
+    'no passkey registered': '尚未注册 passkey',
+    'registration expired, start again': '注册已超时，请重新开始',
+    'setup expired, start again': '设置已超时，请重新开始',
+    'invalid request body': '请求格式不正确',
+    'not authenticated': '未登录或会话已过期',
+    'unauthorized': '未登录或会话已过期',
+    'cross-origin request rejected': '跨站请求被拒绝',
+  };
+  return zh[msg] || msg;
+}
+
 async function api(path, opts = {}) {
   const init = {
     method: opts.method || 'GET',
@@ -13,14 +44,15 @@ async function api(path, opts = {}) {
   const resp = await fetch(path, init);
   let data = null;
   try { data = await resp.json(); } catch (e) { /* empty */ }
+  // 401 只代表会话失效；口令步进失败是 403，不能被当成掉线踢回登录页
   if (resp.status === 401 && !path.startsWith('/api/login')) {
     showLogin();
     const msg = (data && (data.error?.message || data.error)) || t('未登录或会话过期');
-    throw new Error(typeof msg === 'string' ? msg : t('未登录或会话过期'));
+    throw new Error(translateServerError(typeof msg === 'string' ? msg : t('未登录或会话过期')));
   }
   if (!resp.ok) {
     const msg = (data && (data.error?.message || data.error || data.message)) || ('HTTP ' + resp.status);
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    throw new Error(translateServerError(typeof msg === 'string' ? msg : JSON.stringify(msg)));
   }
   return data;
 }
@@ -245,6 +277,7 @@ async function changeUsername() {
   const passInput = document.getElementById('usernamePassword');
   const name = (nameInput && nameInput.value || '').trim();
   if (!name) { toast(t('请输入用户名'), 'error'); return; }
+  if (!passInput || !passInput.value) { toast(t('请输入当前密码'), 'error'); return; }
   try {
     const r = await api('/api/auth/username', { method: 'POST', body: {
       new_username: name,
@@ -283,6 +316,15 @@ function resetLoginStep() {
   document.getElementById('loginError').style.display = 'none';
 }
 
+function renderTwoFactorHint() {
+  const hint = document.getElementById('twoFactorHint');
+  if (!hint || !pending2FA) return;
+  const hasPasskey = (pending2FA.methods || []).indexOf('passkey') >= 0;
+  hint.textContent = hasPasskey
+    ? t('还需第二因素：使用 passkey，或改用验证码。')
+    : t('输入验证码或恢复码完成登录。');
+}
+
 function showTwoFactorStep(data) {
   pending2FA = data;
   document.getElementById('loginStep1').style.display = 'none';
@@ -290,9 +332,7 @@ function showTwoFactorStep(data) {
   const methods = data.methods || [];
   const hasPasskey = methods.indexOf('passkey') >= 0;
   document.getElementById('passkeyRow').style.display = hasPasskey ? '' : 'none';
-  document.getElementById('twoFactorHint').textContent = hasPasskey
-    ? t('还需第二因素：使用 passkey，或改用验证码。')
-    : t('输入验证码或恢复码完成登录。');
+  renderTwoFactorHint();
   // 用户设定：默认先问 passkey；取消/失败后留在验证码输入框
   if (hasPasskey) doPasskeyLogin();
   else document.getElementById('loginCode').focus();
@@ -422,6 +462,7 @@ async function addPasskey() {
   }
   const label = (document.getElementById('passkeyLabel').value || '').trim();
   const pwd = document.getElementById('passkeyPassword').value;
+  if (!pwd) { toast(t('请输入当前密码'), 'error'); return; }
   try {
     const begin = await api('/api/auth/passkey/register/begin', {
       method: 'POST', body: { current_password: pwd, label } });
@@ -484,6 +525,8 @@ async function startTOTPSetup() {
 async function enableTOTP() {
   const code = document.getElementById('totpCode').value.trim();
   const pwd = document.getElementById('totpPassword').value;
+  if (!code) { toast(t('请输入验证码'), 'error'); return; }
+  if (!pwd) { toast(t('请输入当前密码'), 'error'); return; }
   try {
     const d = await api('/api/auth/totp/enable', { method: 'POST', body: { code, current_password: pwd } });
     document.getElementById('totpSetupBox').style.display = 'none';
@@ -538,6 +581,7 @@ function syncLlmPromptDefault() {
 
 function onLanguageChanged() {
   syncLlmPromptDefault();
+  renderTwoFactorHint();
   const main = document.getElementById('mainApp');
   if (!main || main.style.display === 'none') return;
   const active = document.querySelector('.section.active');
@@ -1850,10 +1894,14 @@ function copyToClipboard(text) {
 }
 
 async function changePassword() {
+  const oldPwd = document.getElementById('oldPassword').value;
+  const newPwd = document.getElementById('newPassword').value;
+  if (!oldPwd) { toast(t('请输入当前密码'), 'error'); return; }
+  if (!newPwd) { toast(t('请输入新密码'), 'error'); return; }
   try {
     await api('/api/auth/password', { method: 'POST', body: {
-      old_password: document.getElementById('oldPassword').value,
-      new_password: document.getElementById('newPassword').value,
+      old_password: oldPwd,
+      new_password: newPwd,
     }});
     toast(t('密码已修改，请重新登录')); setTimeout(doLogout, 1200);
   } catch (e) { toast(e.message, 'error'); }

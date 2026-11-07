@@ -752,6 +752,18 @@ const I18N_EN = {
   '验证': 'Verify',
   '使用 passkey': 'Use passkey',
   '返回': 'Back',
+
+  // 后端错误与其余补齐项
+  '请输入当前密码': 'Enter your current password',
+  '请输入新密码': 'Enter a new password',
+  '付费': 'paid',
+  '密码损坏': 'Password corrupted',
+  '密码密文无法用当前钥匙解密，节点已被跳过': 'Stored password cannot be decrypted with the active vault key; node skipped',
+  '流内错误': 'In-stream error',
+  '流内错误: %s': 'In-stream error: %s',
+  '轮询已停止: %s（如已完成授权请刷新账号列表）': 'Polling stopped: %s (refresh the account list if you already finished authorising)',
+  'current password incorrect': 'Current password incorrect',
+  'old password incorrect': 'Old password incorrect',
 };
 
 // ---- 启动：解析语言并应用到静态 DOM（脚本位于 body 末尾，DOM 已就绪） ----
