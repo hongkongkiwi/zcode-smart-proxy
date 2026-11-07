@@ -803,7 +803,7 @@ function renderAccounts() {
         <td style="min-width:190px;cursor:pointer" title="${t('点击查看套餐与额度构成')}" onclick="showQuotaModal(${a.id})">${quotaCell(a)}</td>
         <td><span class="mono" title="${esc(a.device_mid)}">${a.device_mid ? esc(a.device_mid.slice(0, 8)) + '…' : '-'}</span></td>
         <td>${a.use_count} / ${a.fail_count}<div style="font-size:10.5px;color:var(--c-text-lighter)">${fmtAgo(a.last_used_at)}</div></td>
-        <td style="max-width:170px">${a.last_claim_at ? `<div style="font-size:11px">${esc(a.last_claim_plan || '')}</div><div style="font-size:10.5px;color:var(--c-text-lighter)">${esc((a.last_claim_msg || '').slice(0, 40))}</div>` : '<span style="color:var(--c-text-lighter)">-</span>'}</td>
+        <td style="max-width:170px">${a.last_claim_at ? `<div style="font-size:11px">${esc(a.last_claim_plan || '')}</div><div style="font-size:10.5px;color:var(--c-text-lighter)">${esc(translateServerError((a.last_claim_msg || '').slice(0, 40)))}</div>` : '<span style="color:var(--c-text-lighter)">-</span>'}</td>
         <td class="actions-cell">
           <button class="btn btn-sm btn-secondary" onclick="refreshQuota(${a.id})">${t('刷新')}</button>
           <button class="btn btn-sm btn-primary" onclick="claimNow(${a.id})">${t('领活动')}</button>
