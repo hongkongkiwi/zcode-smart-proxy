@@ -1,0 +1,35 @@
+# Runtime image for the DigitalOcean deployment (singapore-vps).
+# The Go binary is cross-compiled OFF the droplet (it has 2GB RAM, too tight
+# for a full Go build) and copied in, so this is a thin alpine+chromium layer.
+#
+# Build the binary from the repo root first:
+#   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+#     go build -trimpath -ldflags="-s -w" -o <staging>/zcode-proxy .
+# …then copy this file and the binary into the deploy dir on the droplet and
+# run `docker compose build`.
+#
+# Equivalent to the repo-root Dockerfile runtime stage (alpine 3.20 +
+# chromium for captcha.go findRealBrowser + unprivileged uid 10001); the
+# repo-root Dockerfile additionally builds from source and stays canonical
+# for local/CI use.
+FROM alpine:3.20
+
+RUN apk add --no-cache chromium
+
+RUN addgroup -g 10001 app && adduser -D -u 10001 -G app -H app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
+
+COPY zcode-proxy /app/zcode-proxy
+
+# SQLite DB, vault.key and initial_admin_password (0600) live here.
+# Bind mounts must be chown'd 10001:10001 or NewDB fatal-loops the container.
+VOLUME ["/app/data"]
+
+EXPOSE 8687
+
+USER app
+WORKDIR /app
+
+ENTRYPOINT ["/app/zcode-proxy"]
+CMD ["-config", "/app/config", "-db", "/app/data/zcode-proxy.db"]

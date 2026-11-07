@@ -1,0 +1,13 @@
+{
+  "listen_addr": "0.0.0.0:8687",
+  "app_version": "3.14.4",
+  "models": [
+    "GLM-5.3",
+    "GLM-5.3-Flash"
+  ],
+  "upstream": {
+    "zai": "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages",
+    "zai_fallback": "https://api.z.ai/api/anthropic/v1/messages",
+    "bigmodel": "https://open.bigmodel.cn/api/anthropic/v1/messages"
+  }
+}

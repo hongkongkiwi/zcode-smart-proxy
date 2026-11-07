@@ -1,0 +1,44 @@
+# zcode-proxy on singapore-vps (DigitalOcean sgp1, 157.245.158.183).
+#
+# Topology: internet → nginx-sni (host :443, SNI split, PROXY protocol)
+#   → haproxy (TLS termination, *.internal.getyokedapp.com wildcard cert)
+#   → this container, published only on the docker bridge gateway 172.17.0.1
+#   so it is reachable from haproxy but not from the public interface.
+#
+# First start: with no ZCODE_WEB_PASS and an empty DB the bootstrap admin
+# password is written to data/initial_admin_password (0600) — read it on the
+# droplet, never through a public channel. Data dir must be chown'd
+# 10001:10001 before first start (see root docker-compose.yml header).
+services:
+  zcode-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    image: zcode-proxy-do:latest
+    container_name: zcode-proxy
+    restart: unless-stopped
+    stop_grace_period: 4m
+    ports:
+      # Bridge gateway only: not loopback (haproxy runs in a container and
+      # reaches the host over docker0), not 0.0.0.0 (public interface).
+      - "172.17.0.1:8687:8687"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    environment:
+      # TLS terminates at haproxy, so r.TLS is nil behind the proxy; force
+      # the Secure flag on the session cookie (auth.go cookieSecureOverride).
+      ZCODE_COOKIE_SECURE: "1"
+    # The box has 1.9GB total and co-hosts xray/rustdesk/phase; chromium
+    # captcha solves are the memory spike source, so cap the blast radius.
+    mem_limit: 1g
+    memswap_limit: 1200m
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8687/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
