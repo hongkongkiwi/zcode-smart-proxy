@@ -6,29 +6,26 @@
 
 Go 单二进制，内嵌管理界面与纯 Go SQLite，无 CGO。验证码求解使用本机 Chrome/Edge，Docker 镜像内置 Chromium。
 
-[![CI](https://github.com/hongkongkiwi/zcode-smart-proxy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hongkongkiwi/zcode-smart-proxy/actions/workflows/ci.yml)
-[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square)](go.mod)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square)](docker-compose.yml)
-[![Single binary](https://img.shields.io/badge/deploy-single%20binary-2ea44f?style=flat-square)](#快速开始)
+[![CI](https://github.com/hongkongkiwi/zcode-smart-proxy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hongkongkiwi/zcode-smart-proxy/actions/workflows/ci.yml) [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square)](go.mod) [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square)](docker-compose.yml) [![Single binary](https://img.shields.io/badge/deploy-single%20binary-2ea44f?style=flat-square)](#快速开始)
+
+[核心能力](#核心能力) · [界面](#界面) · [快速开始](#快速开始) · [功能详解](#功能详解) · [配置参考](#配置参考) · [技术细节](#技术细节) · [已知限制](#已知限制) · [免责条款](#免责条款)
 
 </div>
 
 > 仅供个人学习、研究和技术交流使用。使用前请阅读文末免责条款。
 
-[核心能力](#核心能力) · [界面](#界面) · [快速开始](#快速开始) · [功能详解](#功能详解) · [配置参考](#配置参考) · [技术细节](#技术细节) · [已知限制](#已知限制) · [免责条款](#免责条款)
-
 ## 核心能力
 
 | 模块 | 能力 |
 | --- | --- |
-| 账号池 | 本地一键导入、OAuth 轮询登录、JWT/API Key 粘贴、分组、`random` / `round_robin` / `best_quota` / `priority` 四种策略、免费/付费双通道、会话粘滞、状态机恢复 |
-| 2API 网关 | Anthropic `/v1/messages`、OpenAI `/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/models`；SSE、工具调用、思考链、用量与 TTFT 记录 |
-| 网关 Key | 命名 `sk-` Key，独立 RPM、总配额、模型白名单；库内仅存 SHA-256 |
-| 活动与配额 | 活动检测、领取、激活、Coding Plan 配额重置；自动领取、自动重置、到期即花 |
-| 人机验证 | go-rod 驱动本机 Chrome/Edge，无头优先、有头兜底，按出口代理分组缓存 |
-| 传输与反检测 | utls 20+ 指纹、按主机选择 HTTP/1.1 或 HTTP/2、设备指纹保持、分组出口代理 |
-| 本地联动 | 提取本机登录态、一键切回、快照还原、`zcb1:` 加密账号包 |
-| 部署与观测 | 单二进制、embed UI、纯 Go SQLite、仪表盘、LLM 测试页、`-doctor` 只读体检 |
+| 账号 | 本地一键导入、OAuth 轮询登录、JWT/API Key 粘贴、分组、`random` / `round_robin` / `best_quota` / `priority` 四种策略、免费/付费双通道、会话粘滞、状态机恢复 |
+| 2API | Anthropic `/v1/messages`、OpenAI `/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/models`；SSE、工具调用、思考链、用量与 TTFT 记录 |
+| 网关 | 命名 `sk-` Key，独立 RPM、总配额、模型白名单；库内仅存 SHA-256 |
+| 活动 | 活动检测、领取、激活、Coding Plan 配额重置；自动领取、自动重置、到期即花 |
+| 验证 | go-rod 驱动本机 Chrome/Edge，无头优先、有头兜底，按出口代理分组缓存 |
+| 指纹 | utls 20+ 指纹、按主机选择 HTTP/1.1 或 HTTP/2、设备指纹保持、分组出口代理 |
+| 本地 | 提取本机登录态、一键切回、快照还原、`zcb1:` 加密账号包 |
+| 部署 | 单二进制、embed UI、纯 Go SQLite、仪表盘、LLM 测试页、`-doctor` 只读体检 |
 
 ## 界面
 
