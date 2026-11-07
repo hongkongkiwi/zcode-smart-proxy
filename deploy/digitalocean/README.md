@@ -25,8 +25,27 @@ the only exposure, and the app port is not bound on the public interface.
 - `config/config.json` — must set `listen_addr: 0.0.0.0:8687` (the app
   default 127.0.0.1 binds loopback inside the container and breaks the
   published port).
+- `.env` (0600) — `ZCODE_WEB_PASS` when migrating an existing instance;
+  interpolated by compose so the file itself stays out of the compose YAML.
 - `data/` — SQLite DB, auto-generated `vault.key`, `initial_admin_password`
   (0600, first start only). `chown -R 10001:10001 data` before first start.
+
+## Migrating settings from another instance
+
+`data/zcode-proxy.db` and `data/vault.key` must move together: account
+credentials are encrypted with the vault key, so a DB without its matching
+key imports but every account fails to decrypt. Copy the source instance's
+`ZCODE_WEB_PASS` into `.env` as well, or the migrated admin password stops
+being the login password.
+
+```bash
+# source instance stopped (launchctl bootout …) so the WAL is checkpointed
+scp <src>/data/zcode.db <src>/data/vault.key root@157.245.158.183:/opt/zcode-proxy/
+ssh root@157.245.158.183 'cd /opt/zcode-proxy && docker compose stop \
+  && mv zcode.db data/zcode-proxy.db && mv vault.key data/vault.key \
+  && chown -R 10001:10001 data && chmod 600 data/vault.key \
+  && docker compose up -d'
+```
 
 ## Update procedure
 
@@ -66,6 +85,11 @@ co-hosted services.
 - sshd on the droplet is key-only (`passwordauthentication no`).
 - Chromium inside the container is used by captcha.go, which passes
   `no-sandbox` itself (captcha.go:603), so no privileged sandbox is needed.
+  It also requires a **writable `$HOME`**: crashpad aborts with
+  `--database is required` when `$HOME` does not exist, and every captcha
+  solve then fails with `Failed to get the debug url`. The image creates
+  `/home/app` and sets `HOME`; without that, captcha solving silently
+  degrades to JWT-direct and accounts get risk-cooled on the free lane.
 
 ## HAProxy vhost
 

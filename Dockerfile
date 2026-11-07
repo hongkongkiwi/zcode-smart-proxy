@@ -28,9 +28,14 @@ FROM alpine:3.20
 # Headed-manual fallback still can't open a display here — headless only.
 RUN apk add --no-cache chromium
 
-RUN addgroup -g 10001 app && adduser -D -u 10001 -G app -H app \
-    && mkdir -p /app/data \
-    && chown -R app:app /app
+# A writable HOME is mandatory: chromium's crashpad handler aborts without
+# one ("--database is required") and captcha solving then fails on every
+# attempt. adduser creates /home/app unless -H is passed.
+RUN addgroup -g 10001 app && adduser -D -u 10001 -G app app \
+    && mkdir -p /app/data /home/app \
+    && chown -R app:app /app /home/app
+
+ENV HOME=/home/app
 
 COPY --from=build /out/zcode-proxy /app/zcode-proxy
 

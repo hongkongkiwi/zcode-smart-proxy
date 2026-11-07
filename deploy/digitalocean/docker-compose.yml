@@ -29,6 +29,10 @@ services:
       # TLS terminates at haproxy, so r.TLS is nil behind the proxy; force
       # the Secure flag on the session cookie (auth.go cookieSecureOverride).
       ZCODE_COOKIE_SECURE: "1"
+      # Interpolated from /opt/zcode-proxy/.env (0600). Kept out of this file
+      # so the compose file stays committable. When migrating settings from
+      # another instance, copy its ZCODE_WEB_PASS here to keep logins working.
+      ZCODE_WEB_PASS: ${ZCODE_WEB_PASS:-}
     # The box has 1.9GB total and co-hosts xray/rustdesk/phase; chromium
     # captcha solves are the memory spike source, so cap the blast radius.
     mem_limit: 1g
