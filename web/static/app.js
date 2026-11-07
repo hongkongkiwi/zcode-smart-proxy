@@ -109,6 +109,8 @@ function statusBadge(st) {
 function showLogin() {
   document.getElementById('loginPage').style.display = 'flex';
   document.getElementById('mainApp').style.display = 'none';
+  resetLoginStep();
+  loadLoginInfo();
 }
 function showApp(username) {
   document.getElementById('loginPage').style.display = 'none';
@@ -141,6 +143,7 @@ async function doLogin() {
   if (btn) btn.disabled = true;
   try {
     const data = await api('/api/login', { method: 'POST', body: { username, password } });
+    if (data && data.two_factor_required) { showTwoFactorStep(data); return; }
     showApp(data.username);
     if (data.is_default_password) warnDefaultPassword();
   } catch (e) {
@@ -215,7 +218,7 @@ function switchSection(name) {
   if (name === 'activity') { loadPlans(); loadClaimRecords(); loadPlanRuns(); }
   if (name === 'usage') { loadUsageStats(); loadUsageRecords(); }
   if (name === 'llmtest') { loadLlmKey(); initLlmPlaceholders(); }
-  if (name === 'settings') { loadSettings(); loadAdminProfile(); }
+  if (name === 'settings') { loadSettings(); loadAdminProfile(); loadTwoFactor(); }
 }
 
 // toggleTheme flips the persisted theme; the pre-paint script reads the same key
@@ -250,6 +253,254 @@ async function changeUsername() {
     if (passInput) passInput.value = '';
     setDisplayedUser((r && r.username) || name);
     toast(t('用户名已更新'));
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- 两步登录：passkey 优先，验证码/恢复码回退 ----
+
+let pending2FA = null;
+
+function b64urlToBuf(s) {
+  const pad = '='.repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  const buf = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+  return buf.buffer;
+}
+
+function bufToB64url(buf) {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function resetLoginStep() {
+  pending2FA = null;
+  document.getElementById('loginStep1').style.display = '';
+  document.getElementById('loginStep2').style.display = 'none';
+  document.getElementById('loginCode').value = '';
+  document.getElementById('loginError').style.display = 'none';
+}
+
+function showTwoFactorStep(data) {
+  pending2FA = data;
+  document.getElementById('loginStep1').style.display = 'none';
+  document.getElementById('loginStep2').style.display = '';
+  const methods = data.methods || [];
+  const hasPasskey = methods.indexOf('passkey') >= 0;
+  document.getElementById('passkeyRow').style.display = hasPasskey ? '' : 'none';
+  document.getElementById('twoFactorHint').textContent = hasPasskey
+    ? t('还需第二因素：使用 passkey，或改用验证码。')
+    : t('输入验证码或恢复码完成登录。');
+  // 用户设定：默认先问 passkey；取消/失败后留在验证码输入框
+  if (hasPasskey) doPasskeyLogin();
+  else document.getElementById('loginCode').focus();
+}
+
+async function doPasskeyLogin() {
+  if (!pending2FA) return;
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    toast(t('此浏览器不支持 passkey，请使用验证码'), 'error');
+    document.getElementById('loginCode').focus();
+    return;
+  }
+  try {
+    const begin = await api('/api/login/passkey/begin', { method: 'POST', body: { challenge: pending2FA.challenge } });
+    const pk = begin.options.publicKey || begin.options;
+    const cred = await navigator.credentials.get({ publicKey: {
+      challenge: b64urlToBuf(pk.challenge),
+      allowCredentials: (pk.allowCredentials || []).map(c => ({ type: c.type, id: b64urlToBuf(c.id), transports: c.transports })),
+      userVerification: pk.userVerification || 'preferred',
+      rpId: pk.rpId,
+      timeout: pk.timeout,
+    }});
+    const body = {
+      id: cred.id,
+      rawId: bufToB64url(cred.rawId),
+      type: cred.type,
+      clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+      response: {
+        clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+        authenticatorData: bufToB64url(cred.response.authenticatorData),
+        signature: bufToB64url(cred.response.signature),
+        userHandle: cred.response.userHandle ? bufToB64url(cred.response.userHandle) : null,
+      },
+    };
+    const done = await api('/api/login/passkey/finish?ticket=' + encodeURIComponent(begin.ticket), { method: 'POST', body });
+    const user = (done && done.username) || document.getElementById('loginUser').value.trim() || 'admin';
+    resetLoginStep();
+    showApp(user);
+  } catch (e) {
+    // 取消、超时、验证失败都回落到验证码，不把用户卡死在 passkey 上
+    toast(tf('passkey 未完成：%s', e.message || ''), 'error');
+    document.getElementById('loginCode').focus();
+  }
+}
+
+async function doTOTPLogin() {
+  if (!pending2FA) return;
+  const code = document.getElementById('loginCode').value.trim();
+  if (!code) { toast(t('请输入验证码'), 'error'); return; }
+  try {
+    const d = await api('/api/login/totp', { method: 'POST', body: { challenge: pending2FA.challenge, code } });
+    resetLoginStep();
+    showApp((d && d.username) || 'admin');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// loadLoginInfo 只在初始口令仍生效时显示首启提示
+async function loadLoginInfo() {
+  const hint = document.getElementById('initialPwHint');
+  if (!hint) return;
+  hint.style.display = 'none';
+  try {
+    const d = await api('/api/auth/login-info');
+    if (d && d.initial_password) hint.style.display = '';
+  } catch (e) { /* 保守：拿不到状态就不显示 */ }
+}
+
+// ---- 2FA 管理 ----
+
+function promptPassword(title) {
+  return new Promise(resolve => {
+    openModal(`<h3>${esc(title)}</h3>
+      <div class="form-group"><label for="askPwd">${t('当前密码')}</label>
+      <input type="password" id="askPwd" autocomplete="current-password"></div>
+      <div class="actions">
+      <button class="btn btn-secondary" onclick="window.__askPwdResolve('')">${t('取消')}</button>
+      <button class="btn btn-primary" onclick="window.__askPwdResolve(document.getElementById('askPwd').value)">${t('确认')}</button>
+      </div>`);
+    window.__askPwdResolve = (v) => { window.__askPwdResolve = null; closeModal(); resolve(v); };
+    setTimeout(() => { const el = document.getElementById('askPwd'); if (el) el.focus(); }, 60);
+  });
+}
+
+async function loadTwoFactor() {
+  try {
+    const [totp, pk] = await Promise.all([
+      api('/api/auth/totp/status'),
+      api('/api/auth/passkey/status'),
+    ]);
+    const enabled = !!(totp.enabled || (pk && pk.count > 0));
+    const badge = document.getElementById('twoFactorBadge');
+    if (badge) {
+      badge.textContent = enabled ? t('已启用') : t('未启用');
+      badge.className = 'badge ' + (enabled ? 'badge-success' : 'badge-secondary');
+    }
+    const statusRow = document.getElementById('totpStatusRow');
+    if (statusRow) {
+      statusRow.textContent = totp.enabled
+        ? tf('已启用 · 剩余恢复码 %s 个', totp.recovery_remaining)
+        : t('未启用');
+    }
+    const startBtn = document.getElementById('totpStartBtn');
+    const disableBtn = document.getElementById('totpDisableBtn');
+    if (startBtn) startBtn.style.display = totp.enabled ? 'none' : '';
+    if (disableBtn) disableBtn.style.display = totp.enabled ? '' : 'none';
+
+    const list = document.getElementById('passkeyList');
+    if (list) {
+      if (!pk || !pk.count) list.innerHTML = `<p class="hint">${t('尚未添加 passkey')}</p>`;
+      else list.innerHTML = pk.items.map(p =>
+        `<div class="passkey-item"><span class="mono">${esc(p.label)}</span>
+         <button class="btn btn-sm btn-secondary" onclick="deletePasskey('${esc(p.id)}')">${t('删除')}</button></div>`).join('');
+    }
+    const hint = document.getElementById('passkeyHint');
+    if (hint) {
+      hint.textContent = (pk && pk.count)
+        ? t('登录时会先提示使用 passkey，失败可改用验证码。')
+        : t('添加后，登录会默认提示使用 passkey。');
+    }
+  } catch (e) { reportLoadError(e); }
+}
+
+async function addPasskey() {
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    toast(t('此浏览器不支持 passkey'), 'error');
+    return;
+  }
+  const label = (document.getElementById('passkeyLabel').value || '').trim();
+  const pwd = document.getElementById('passkeyPassword').value;
+  try {
+    const begin = await api('/api/auth/passkey/register/begin', {
+      method: 'POST', body: { current_password: pwd, label } });
+    const pk = begin.options.publicKey || begin.options;
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: b64urlToBuf(pk.challenge),
+      rp: pk.rp,
+      user: { id: b64urlToBuf(pk.user.id), name: pk.user.name, displayName: pk.user.displayName },
+      pubKeyCredParams: pk.pubKeyCredParams,
+      authenticatorSelection: pk.authenticatorSelection,
+      attestation: pk.attestation,
+      timeout: pk.timeout,
+      excludeCredentials: (pk.excludeCredentials || []).map(c => ({ type: c.type, id: b64urlToBuf(c.id), transports: c.transports })),
+    }});
+    const body = {
+      id: cred.id,
+      rawId: bufToB64url(cred.rawId),
+      type: cred.type,
+      clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+      response: {
+        clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+        attestationObject: bufToB64url(cred.response.attestationObject),
+        transports: cred.response.getTransports ? cred.response.getTransports() : [],
+      },
+    };
+    await api('/api/auth/passkey/register/finish?ticket=' + encodeURIComponent(begin.ticket), { method: 'POST', body });
+    document.getElementById('passkeyPassword').value = '';
+    document.getElementById('passkeyLabel').value = '';
+    toast(t('passkey 已添加'));
+    loadTwoFactor();
+  } catch (e) { toast(tf('添加失败：%s', e.message || ''), 'error'); }
+}
+
+async function deletePasskey(id) {
+  const pwd = await promptPassword(t('删除 passkey'));
+  if (!pwd) return;
+  try {
+    await api('/api/auth/passkey/delete', { method: 'POST', body: { id, current_password: pwd } });
+    toast(t('已删除'));
+    loadTwoFactor();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function startTOTPSetup() {
+  try {
+    const d = await api('/api/auth/totp/setup', { method: 'POST', body: {} });
+    document.getElementById('totpQR').src = d.qr_data_uri;
+    document.getElementById('totpSecret').textContent = d.secret;
+    document.getElementById('totpRecoveryBox').style.display = 'none';
+    document.getElementById('totpSetupBox').style.display = '';
+    document.getElementById('totpCode').focus();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function enableTOTP() {
+  const code = document.getElementById('totpCode').value.trim();
+  const pwd = document.getElementById('totpPassword').value;
+  try {
+    const d = await api('/api/auth/totp/enable', { method: 'POST', body: { code, current_password: pwd } });
+    document.getElementById('totpSetupBox').style.display = 'none';
+    document.getElementById('totpPassword').value = '';
+    document.getElementById('totpCode').value = '';
+    document.getElementById('totpRecoveryCodes').textContent = (d.recovery_codes || []).join('\n');
+    document.getElementById('totpRecoveryBox').style.display = '';
+    toast(t('TOTP 已启用'));
+    loadTwoFactor();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function disableTOTP() {
+  const code = (document.getElementById('totpCode').value || '').trim();
+  if (!code) { toast(t('请先输入当前验证码或恢复码'), 'error'); return; }
+  const pwd = await promptPassword(t('停用 TOTP'));
+  if (!pwd) return;
+  try {
+    await api('/api/auth/totp/disable', { method: 'POST', body: { current_password: pwd, code } });
+    document.getElementById('totpRecoveryBox').style.display = 'none';
+    toast(t('TOTP 已停用'));
+    loadTwoFactor();
   } catch (e) { toast(e.message, 'error'); }
 }
 

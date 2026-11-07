@@ -56,6 +56,15 @@ type AuthManager struct {
 
 	gwRPM     gwRPMTracker    // 命名网关 Key 的 RPM 滑动窗口（R1）
 	gwWindows gwWindowTracker // 命名网关 Key 的滚动窗口请求限额（5h/1d/7d）
+
+	// 2FA 内存状态（不落库：挑战票与待确认 secret 都应随进程消失）
+	totpMu      sync.Mutex
+	pendingTOTP map[string]pendingTOTPSetup // key = username
+	challenges  map[string]*loginChallenge  // key = 一次性挑战票
+
+	// passkey 仪式态（SessionData 只在一次 ceremony 内有效）
+	passkeyMu      sync.Mutex
+	passkeyTickets map[string]*passkeyTicket
 }
 
 // loginBypassCooldown 锁定中两次真实口令验证之间的最小间隔（打包级变量便于
@@ -361,8 +370,10 @@ func GenerateAPIKey() string {
 	return "sk-" + hex.EncodeToString(b)
 }
 
-// Login 验证用户名密码，创建会话（带 IP+用户名 限速）
-func (am *AuthManager) Login(username, password, clientIP string) (string, bool, time.Duration) {
+// VerifyCredentials 校验用户名/口令并做 IP+用户名 限速，但不创建会话。
+// 2FA 登录必须在校验和发会话之间插入第二步，所以发会话被拆出：
+// 未过第二因素就拿到 session 会让 2FA 形同虚设。
+func (am *AuthManager) VerifyCredentials(username, password, clientIP string) (bool, time.Duration) {
 	am.mu.RLock()
 	version := am.passwordVersion
 	am.mu.RUnlock()
@@ -377,14 +388,14 @@ func (am *AuthManager) Login(username, password, clientIP string) (string, bool,
 		// 按锁定等待拒绝，不烧 bcrypt），且被验证过的错误口令照常计入失败
 		// （续期锁定）——否则锁定窗口内可无限爆破，把锁定器变成摆设
 		if username != am.adminUser() {
-			return "", false, wait
+			return false, wait
 		}
 		if !am.allowBypassCheck(rateKey) {
-			return "", false, wait
+			return false, wait
 		}
 		if !am.verifyPassword(password) {
 			am.recordLoginFail(rateKey)
-			return "", false, wait
+			return false, wait
 		}
 		// 走到下方正常登录路径：clearLoginFail 会摘除失败状态
 	} else {
@@ -392,22 +403,27 @@ func (am *AuthManager) Login(username, password, clientIP string) (string, bool,
 		// 避免登录风暴期间阻塞所有持读锁的 /api 请求
 		if username != am.adminUser() {
 			am.recordLoginFail(rateKey)
-			return "", false, 0
+			return false, 0
 		}
 		if !am.verifyPassword(password) {
 			am.recordLoginFail(rateKey)
-			return "", false, 0
+			return false, 0
 		}
 	}
 
 	am.mu.Lock()
+	defer am.mu.Unlock()
 	if version != am.passwordVersion {
-		am.mu.Unlock()
-		return "", false, 0
+		return false, 0
 	}
 	am.clearLoginFail(rateKey)
+	return true, 0
+}
 
+// issueSession 清理过期会话并签发新 token；调用方必须已完成口令与第二因素校验。
+func (am *AuthManager) issueSession(username string) string {
 	now := time.Now()
+	am.mu.Lock()
 	for token, s := range am.sessions {
 		if now.After(s.expiresAt) {
 			delete(am.sessions, token)
@@ -416,6 +432,16 @@ func (am *AuthManager) Login(username, password, clientIP string) (string, bool,
 	token := generateToken()
 	am.sessions[token] = &sessionEntry{username: username, createdAt: now, expiresAt: now.Add(sessionExpiry)}
 	am.mu.Unlock()
+	return token
+}
+
+// Login 校验通过即创建会话（未启用 2FA 的路径与既有调用方）。
+func (am *AuthManager) Login(username, password, clientIP string) (string, bool, time.Duration) {
+	ok, wait := am.VerifyCredentials(username, password, clientIP)
+	if !ok {
+		return "", false, wait
+	}
+	token := am.issueSession(username)
 	log.Printf("[auth] login success: user=%s", username)
 	return token, true, 0
 }
@@ -479,7 +505,9 @@ func (am *AuthManager) Middleware(next http.Handler) http.Handler {
 		// /web 必须整段匹配：裸前缀会把未来的 /webhooks 之类静默变成免认证路由。
 		// /oauth 同理只精确放行 /oauth/callback（评审 2026-10-26 L1：裸前缀
 		// 会让未来挂到 /oauth/ 下的任何 handler 静默免认证）
-		if path == "/api/login" || path == "/health" ||
+		if path == "/api/login" || path == "/api/login/totp" || path == "/api/auth/login-info" ||
+			path == "/api/login/passkey/begin" || path == "/api/login/passkey/finish" ||
+			path == "/health" ||
 			path == "/web" || strings.HasPrefix(path, "/web/") || path == "/oauth/callback" {
 			next.ServeHTTP(w, r)
 			return
@@ -573,6 +601,21 @@ func sameOriginHost(origin, host string) bool {
 	return strings.EqualFold(u.Host, host)
 }
 
+// setSessionCookie 统一会话 cookie 属性：两条登录路径（口令 / 口令+2FA）必须
+// 完全一致，否则其中一个会漏掉 Secure。TLS 终止在反代时 r.TLS 恒为 nil，
+// 由 ZCODE_COOKIE_SECURE=1 显式强制。
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   int(sessionExpiry.Seconds()),
+		SameSite: http.SameSiteStrictMode,
+		Secure:   r.TLS != nil || cookieSecureOverride(),
+	})
+}
+
 // HandleLogin POST /api/login
 func (am *AuthManager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -583,7 +626,7 @@ func (am *AuthManager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	token, ok, wait := am.Login(body.Username, body.Password, clientIP(r))
+	ok, wait := am.VerifyCredentials(body.Username, body.Password, clientIP(r))
 	if !ok {
 		if wait > 0 {
 			writeAPIError(w, http.StatusTooManyRequests,
@@ -593,17 +636,26 @@ func (am *AuthManager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		MaxAge:   int(sessionExpiry.Seconds()),
-		SameSite: http.SameSiteStrictMode,
-		// TLS 终止在反代（r.TLS == nil）时启发式失效：ZCODE_COOKIE_SECURE=1
-		// 显式强制 Secure，防管理会话 cookie 经明文 http 请求外泄
-		Secure: r.TLS != nil || cookieSecureOverride(),
-	})
+
+	// 启用 2FA（passkey 或 TOTP 任一）后口令只是第一因素：这里不发会话，
+	// 只发一次性挑战票。两者都未启用时保持原有的单因子登录。
+	if am.twoFactorEnabled() {
+		challenge, err := am.newLoginChallenge()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "failed to start 2FA challenge")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"two_factor_required": true,
+			"challenge":           challenge,
+			"methods":             am.twoFactorMethods(),
+		})
+		return
+	}
+
+	token := am.issueSession(body.Username)
+	log.Printf("[auth] login success: user=%s", body.Username)
+	setSessionCookie(w, r, token)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":             true,
 		"token":               token,

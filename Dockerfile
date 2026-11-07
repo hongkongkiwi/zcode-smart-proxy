@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build stage ----
-# Version matches go.mod (go 1.25.0).
-FROM golang:1.25-alpine AS build
+# Version matches go.mod (go 1.26.0 — raised by go-webauthn).
+FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 

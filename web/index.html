@@ -36,6 +36,8 @@
 <h1 data-i18n="登录">登录</h1>
 <p class="login-sub" data-i18n="多账号管理 · 2API 网关">多账号管理 · 2API 网关</p>
 <div class="login-error" id="loginError" role="alert" aria-live="polite"></div>
+
+<div id="loginStep1">
 <div class="field">
 <label for="loginUser" data-i18n="用户名">用户名</label>
 <input type="text" id="loginUser" autocomplete="username" autocapitalize="off" spellcheck="false">
@@ -45,7 +47,23 @@
 <input type="password" id="loginPass" autocomplete="current-password">
 </div>
 <button class="btn btn-primary" type="submit" data-i18n="登录">登录</button>
-<p class="hint" style="text-align:center;margin-top:16px" data-i18n="初始密码见服务端首次启动日志，或由 ZCODE_WEB_PASS 指定">初始密码见服务端首次启动日志，或由 ZCODE_WEB_PASS 指定</p>
+<p class="hint" id="initialPwHint" style="display:none;text-align:center;margin-top:16px" data-i18n="初始密码见服务端首次启动日志，或由 ZCODE_WEB_PASS 指定">初始密码见服务端首次启动日志，或由 ZCODE_WEB_PASS 指定</p>
+</div>
+
+<div id="loginStep2" style="display:none">
+<p class="login-sub" id="twoFactorHint" style="margin-bottom:16px"></p>
+<div id="passkeyRow" style="display:none;margin-bottom:14px">
+<button class="btn btn-primary btn-block" type="button" id="passkeyLoginBtn" onclick="doPasskeyLogin()" data-i18n="使用 passkey">使用 passkey</button>
+</div>
+<div id="codeRow">
+<div class="field">
+<label for="loginCode" data-i18n="验证码或恢复码">验证码或恢复码</label>
+<input type="text" id="loginCode" inputmode="numeric" autocomplete="one-time-code" spellcheck="false">
+</div>
+<button class="btn btn-secondary btn-block" type="button" onclick="doTOTPLogin()" data-i18n="验证">验证</button>
+</div>
+<button class="btn btn-ghost btn-block" type="button" style="margin-top:10px" onclick="resetLoginStep()" data-i18n="返回">返回</button>
+</div>
 </form>
 <div class="login-foot">
 <select class="lang-select" onchange="setLangChoice(this.value)" data-i18n-title="语言 / Language" title="语言 / Language">
@@ -413,6 +431,46 @@
 <button class="btn btn-primary" onclick="changeUsername()" data-i18n="保存用户名">保存用户名</button>
 </div>
 </div>
+<div class="card" id="twoFactorCard">
+<div class="card-header"><div><h2 data-i18n="双重验证">双重验证</h2><div class="card-sub" data-i18n="可选。启用后登录需要密码 + passkey 或验证码。">可选。启用后登录需要密码 + passkey 或验证码。</div></div>
+<span class="badge" id="twoFactorBadge">-</span></div>
+<div class="card-body">
+<div class="form-group">
+<label class="form-label" data-i18n="Passkey">Passkey</label>
+<div id="passkeyList" class="passkey-list"><p class="hint" data-i18n="尚未添加 passkey">尚未添加 passkey</p></div>
+<div class="llm-row" style="margin-top:10px">
+<input class="form-input" id="passkeyLabel" data-i18n-ph="名称（如 MacBook）" placeholder="名称（如 MacBook）">
+<input class="form-input" type="password" id="passkeyPassword" autocomplete="current-password" data-i18n-ph="当前密码" placeholder="当前密码">
+</div>
+<button class="btn btn-primary" style="margin-top:10px" onclick="addPasskey()" data-i18n="添加 passkey">添加 passkey</button>
+<div class="hint" id="passkeyHint" style="margin-top:8px"></div>
+</div>
+<hr class="rule">
+<div class="form-group" style="margin-bottom:0">
+<label class="form-label" data-i18n="验证器应用（TOTP）">验证器应用（TOTP）</label>
+<div id="totpStatusRow" class="hint"></div>
+<div id="totpSetupBox" style="display:none;margin-top:12px">
+<div class="totp-qr-wrap"><img id="totpQR" alt="TOTP QR" width="176" height="176"></div>
+<div class="hint" style="margin:8px 0" data-i18n="扫描二维码，或手动输入密钥：">扫描二维码，或手动输入密钥：</div>
+<code id="totpSecret" class="mono"></code>
+<div class="llm-row" style="margin-top:12px">
+<input class="form-input" id="totpCode" inputmode="numeric" autocomplete="one-time-code" data-i18n-ph="6 位验证码" placeholder="6 位验证码">
+<input class="form-input" type="password" id="totpPassword" autocomplete="current-password" data-i18n-ph="当前密码" placeholder="当前密码">
+</div>
+<button class="btn btn-primary" style="margin-top:10px" onclick="enableTOTP()" data-i18n="确认启用">确认启用</button>
+</div>
+<div id="totpRecoveryBox" style="display:none;margin-top:12px">
+<div class="warn-box" data-i18n="恢复码只显示这一次，请离线保存；每个只能用一次。">恢复码只显示这一次，请离线保存；每个只能用一次。</div>
+<pre class="code-block" id="totpRecoveryCodes"></pre>
+</div>
+<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+<button class="btn btn-secondary btn-sm" id="totpStartBtn" onclick="startTOTPSetup()" data-i18n="启用 TOTP">启用 TOTP</button>
+<button class="btn btn-secondary btn-sm" id="totpDisableBtn" onclick="disableTOTP()" data-i18n="停用 TOTP">停用 TOTP</button>
+</div>
+</div>
+</div>
+</div>
+
 <div class="card">
 <div class="card-header"><div><h2 data-i18n="修改密码">修改密码</h2></div></div>
 <div class="card-body">
