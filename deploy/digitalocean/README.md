@@ -70,6 +70,29 @@ The Go build is deliberately done on the workstation, not the droplet: the
 box has 2GB RAM and a full Go toolchain build risks OOM against the
 co-hosted services.
 
+## Two-factor authentication
+
+Optional, off until something is enrolled. Settings → Account security has
+both factors:
+
+- **Passkey** (WebAuthn) is the default prompt at login. Registration and
+  deletion require the current password; the first passkey also issues the
+  recovery codes.
+- **TOTP** (authenticator app) shows a QR code, then requires a 6-digit code
+  to confirm. Ten single-use recovery codes are displayed once.
+- Recovery codes work for either factor and are the only way back in if the
+  device is lost.
+
+Passkeys need a domain: WebAuthn forbids IP-address Relying Party IDs, so a
+panel reached by IP can use TOTP only. RP ID and origins are derived from the
+request by default; pin them for production so a client-supplied Host header
+cannot choose them:
+
+```
+ZCODE_WEB_RPID=zcode-proxy.internal.getyokedapp.com
+ZCODE_WEB_ORIGIN=https://zcode-proxy.internal.getyokedapp.com
+```
+
 ## Security posture
 
 - Container: unprivileged uid 10001, `no-new-privileges`, mem cap 1g,

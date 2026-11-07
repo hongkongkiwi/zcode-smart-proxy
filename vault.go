@@ -861,7 +861,7 @@ func (db *DB) MigrateVault() error {
 // 同一威胁模型：stolen zcode.db 不得直接读出出口代理凭据。加入本表后
 // SetSetting/GetSetting 透明加解密，MigrateVault 启动时会把存量明文值
 // 一次性加密（encrypt-if-plaintext，幂等），盘点/轮换/合并范围自动覆盖。
-var vaultSecretSettings = []string{"api_key", "password_hash", "upstream_proxy", "totp_secret", "totp_recovery"}
+var vaultSecretSettings = []string{"api_key", "password_hash", "upstream_proxy", "totp_secret", "totp_recovery", "passkey_credentials", "passkey_user_handle"}
 
 // vaultDataDir 返回 DB 文件所在目录（= vault.key 同目录 = 数据目录）。
 // 调用方（NewAuthManager 的引导逻辑）只持有 *DB、拿不到 dbPath，

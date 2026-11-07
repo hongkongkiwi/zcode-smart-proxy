@@ -447,9 +447,14 @@ async function addPasskey() {
         transports: cred.response.getTransports ? cred.response.getTransports() : [],
       },
     };
-    await api('/api/auth/passkey/register/finish?ticket=' + encodeURIComponent(begin.ticket), { method: 'POST', body });
+    const done = await api('/api/auth/passkey/register/finish?ticket=' + encodeURIComponent(begin.ticket), { method: 'POST', body });
     document.getElementById('passkeyPassword').value = '';
     document.getElementById('passkeyLabel').value = '';
+    if (done && done.recovery_codes && done.recovery_codes.length) {
+      // 首次注册 passkey 时补发恢复码：设备丢失后的唯一回退路径
+      document.getElementById('totpRecoveryCodes').textContent = done.recovery_codes.join('\n');
+      document.getElementById('totpRecoveryBox').style.display = '';
+    }
     toast(t('passkey 已添加'));
     loadTwoFactor();
   } catch (e) { toast(tf('添加失败：%s', e.message || ''), 'error'); }

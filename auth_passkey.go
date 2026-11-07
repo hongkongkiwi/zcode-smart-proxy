@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -124,11 +125,29 @@ func (am *AuthManager) passkeyUserFor() (*passkeyUser, error) {
 
 // ---- Relying party ----
 
-// rpFor 从请求推导 RP ID/origin。面板可能同时经内网域名和本机端口访问，
-// 写死一个 origin 会让另一种访问方式直接无法注册/验证。
+// rpFor 解析 RP ID/origin。Host 与 X-Forwarded-Proto 都由客户端控制，
+// 因此生产部署应显式配置：ZCODE_WEB_RPID 与 ZCODE_WEB_ORIGIN（逗号分隔的
+// 允许 origin）。未配置时才从请求推导——面板可能同时经域名和本机端口访问，
+// 写死一个 origin 会让另一种访问方式无法注册/验证。
 // RP ID 必须是域名：WebAuthn 规范不接受 IP，按 IP 访问时 passkey 无法使用
 // （TOTP 仍然可用），这里给出可操作的提示而不是库的原始校验错误。
 func rpFor(r *http.Request) (*webauthn.WebAuthn, error) {
+	if rpid := strings.TrimSpace(os.Getenv("ZCODE_WEB_RPID")); rpid != "" {
+		var origins []string
+		for _, o := range strings.Split(os.Getenv("ZCODE_WEB_ORIGIN"), ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		if len(origins) == 0 {
+			return nil, fmt.Errorf("ZCODE_WEB_RPID is set but ZCODE_WEB_ORIGIN is empty")
+		}
+		return webauthn.New(&webauthn.Config{
+			RPID:          rpid,
+			RPDisplayName: passkeyRPName,
+			RPOrigins:     origins,
+		})
+	}
 	host := r.Host
 	hostname := host
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -330,7 +349,22 @@ func (am *AuthManager) HandlePasskeyRegisterFinish(w http.ResponseWriter, r *htt
 		return
 	}
 	log.Printf("[auth] passkey registered (label=%q), %d total", label, len(list))
-	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "count": len(list)})
+	// passkey 可以单独充当第二因素；若还没有恢复码，首次注册即补发一组，
+	// 否则设备丢失或换机后没有任何回退路径，账号会被永久锁死。
+	var recovery []string
+	if len(am.recoveryHashes()) == 0 {
+		codes, err := am.issueRecoveryCodes()
+		if err != nil {
+			log.Printf("[auth] failed to issue recovery codes for passkey: %v", err)
+		} else {
+			recovery = codes
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":        true,
+		"count":          len(list),
+		"recovery_codes": recovery,
+	})
 }
 
 // HandlePasskeyDelete POST /api/auth/passkey/delete

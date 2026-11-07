@@ -231,6 +231,42 @@ func TestLoginTOTPHandlerCompletesSession(t *testing.T) {
 	}
 }
 
+// TestLoginTOTPRateLimited 持有口令者换票重试也必须被退避拦住：
+// 每次挑战 5 次机会，若没有第二因素层面的限速，6 位码可被持续爆破。
+func TestLoginTOTPRateLimited(t *testing.T) {
+	am, db := newTOTPTestAuth(t)
+	secret, err := totpGenerateSecret()
+	if err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+	if err := db.SetSetting(totpSettingSecret, secret); err != nil {
+		t.Fatalf("store secret: %v", err)
+	}
+	if err := db.SetSetting(totpSettingEnabled, "1"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+
+	limited := false
+	for i := 0; i < 12; i++ {
+		challenge, err := am.newLoginChallenge()
+		if err != nil {
+			t.Fatalf("challenge: %v", err)
+		}
+		body, _ := json.Marshal(map[string]string{"challenge": challenge, "code": "000000"})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/login/totp", strings.NewReader(string(body)))
+		req.RemoteAddr = "203.0.113.9:1234"
+		am.HandleLoginTOTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatal("second-factor attempts were never rate limited")
+	}
+}
+
 // TestPasskeyUserHandleStable 改用户名不能让已注册 passkey 失效。
 func TestPasskeyUserHandleStable(t *testing.T) {
 	am, db := newTOTPTestAuth(t)

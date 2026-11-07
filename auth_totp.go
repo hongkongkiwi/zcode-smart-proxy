@@ -279,6 +279,14 @@ func (am *AuthManager) HandleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "challenge and code are required")
 		return
 	}
+	// 每次挑战只给 5 次机会，但持有口令的攻击者可反复换票重试：
+	// 第二因素必须有自己的退避，否则 6 位码在换票之间可被持续爆破。
+	rateKey := "2fa|" + clientIP(r)
+	if wait := am.checkLoginRate(rateKey); wait > 0 {
+		writeAPIError(w, http.StatusTooManyRequests,
+			fmt.Sprintf("验证尝试过于频繁，请 %d 秒后再试", int(wait.Seconds())+1))
+		return
+	}
 	if am.takeChallenge(body.Challenge) == nil {
 		writeAPIError(w, http.StatusUnauthorized, "2FA challenge expired, sign in again")
 		return
@@ -290,9 +298,11 @@ func (am *AuthManager) HandleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		ok = am.consumeRecoveryCode(body.Code)
 	}
 	if !ok {
+		am.recordLoginFail(rateKey)
 		writeAPIError(w, http.StatusUnauthorized, "invalid verification code")
 		return
 	}
+	am.clearLoginFail(rateKey)
 	am.dropChallenge(body.Challenge)
 	user := am.adminUser()
 	token := am.issueSession(user)
@@ -377,26 +387,13 @@ func (am *AuthManager) HandleTOTPEnable(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusBadRequest, "invalid verification code")
 		return
 	}
-	codes, err := generateRecoveryCodes()
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "failed to generate recovery codes")
-		return
-	}
-	hashes := make([]string, len(codes))
-	for i, c := range codes {
-		hashes[i] = hashRecoveryCode(c)
-	}
-	enc, err := json.Marshal(hashes)
+	codes, err := am.issueRecoveryCodes()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "failed to store recovery codes")
 		return
 	}
 	if err := am.db.SetSetting(totpSettingSecret, pending.secret); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "failed to store secret")
-		return
-	}
-	if err := am.db.SetSetting(totpSettingRecovery, string(enc)); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "failed to store recovery codes")
 		return
 	}
 	if err := am.db.SetSetting(totpSettingEnabled, "1"); err != nil {
@@ -412,6 +409,27 @@ func (am *AuthManager) HandleTOTPEnable(w http.ResponseWriter, r *http.Request) 
 		"enabled":        true,
 		"recovery_codes": codes,
 	})
+}
+
+// issueRecoveryCodes 生成并持久化一组恢复码，返回明文（只在调用时展示一次）。
+// passkey 与 TOTP 共用：任一因素单独存在时，恢复码都是唯一的人工回退路径。
+func (am *AuthManager) issueRecoveryCodes() ([]string, error) {
+	codes, err := generateRecoveryCodes()
+	if err != nil {
+		return nil, err
+	}
+	hashes := make([]string, len(codes))
+	for i, c := range codes {
+		hashes[i] = hashRecoveryCode(c)
+	}
+	enc, err := json.Marshal(hashes)
+	if err != nil {
+		return nil, err
+	}
+	if err := am.db.SetSetting(totpSettingRecovery, string(enc)); err != nil {
+		return nil, err
+	}
+	return codes, nil
 }
 
 // HandleTOTPDisable POST /api/auth/totp/disable
