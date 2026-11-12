@@ -9,20 +9,20 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/ysmood/gson v0.7.3
-	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.58.0
+	golang.org/x/crypto v0.59.0
+	golang.org/x/net v0.62.0
 	modernc.org/sqlite v1.58.0
 )
 
 require (
-	github.com/andybalholm/brotli v1.0.6 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-webauthn/x v0.3.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/klauspost/compress v1.17.4 // indirect
+	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
@@ -33,7 +33,10 @@ require (
 	github.com/ysmood/goob v0.4.0 // indirect
 	github.com/ysmood/got v0.40.0 // indirect
 	github.com/ysmood/leakless v0.9.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
+	github.com/yuin/goldmark v1.7.17 // indirect
+	golang.org/x/mod v0.40.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect

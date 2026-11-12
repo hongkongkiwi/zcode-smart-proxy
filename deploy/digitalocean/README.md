@@ -55,10 +55,12 @@ From the repo root:
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -ldflags="-s -w" -o /tmp/zcode-proxy-do-staging/zcode-proxy .
 
-ssh root@157.245.158.183 'mkdir -p /opt/zcode-proxy'
+ssh root@157.245.158.183 'mkdir -p /opt/zcode-proxy/config'
 scp /tmp/zcode-proxy-do-staging/zcode-proxy root@157.245.158.183:/opt/zcode-proxy/zcode-proxy
 scp deploy/digitalocean/Dockerfile.runtime deploy/digitalocean/docker-compose.yml \
-    deploy/digitalocean/config.json root@157.245.158.183:/opt/zcode-proxy/
+    root@157.245.158.183:/opt/zcode-proxy/
+scp deploy/digitalocean/config.json \
+    root@157.245.158.183:/opt/zcode-proxy/config/config.json
 
 ssh root@157.245.158.183 'cd /opt/zcode-proxy \
   && docker compose build --pull \

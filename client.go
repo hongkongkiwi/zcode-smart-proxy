@@ -518,9 +518,8 @@ func dialRaw(ctx context.Context, dialer *net.Dialer, proxyURL, network, addr st
 		// 会被代理拒绝，整条指纹通道全灭而健康检查（走 stdlib）却显示正常
 		if u.Scheme == "https" {
 			tconn := tls.Client(conn, &tls.Config{
-				ServerName:         u.Hostname(),
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: true, // 代理端证书常为自签；与上游 TLS 校验无关
+				ServerName: u.Hostname(),
+				MinVersion: tls.VersionTLS12,
 			})
 			if err := tconn.HandshakeContext(ctx); err != nil {
 				conn.Close()
