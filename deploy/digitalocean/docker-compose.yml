@@ -16,6 +16,11 @@ services:
       dockerfile: Dockerfile.runtime
     image: zcode-proxy-do:latest
     container_name: zcode-proxy
+    # Stable hostname: the captcha browser profile (data/browser-profile/)
+    # persists across recreations, and Chromium's SingletonLock records the
+    # creating host. A per-container hostname makes every redeploy's lock
+    # look "in use by another computer", killing all captcha solves.
+    hostname: zcode-proxy
     restart: unless-stopped
     stop_grace_period: 4m
     ports:
