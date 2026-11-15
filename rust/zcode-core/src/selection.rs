@@ -14,6 +14,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Default)]
 pub struct AccountView {
     pub id: i64,
+    pub email: String,
     pub provider: String,
     pub enabled: bool,
     /// Go Status string; compared against the string constants to stay
