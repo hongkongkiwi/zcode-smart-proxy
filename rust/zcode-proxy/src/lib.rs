@@ -65,6 +65,9 @@ fn admin_api(state: Arc<AppState>) -> Router {
         .route("/api/stats", get(admin::handle_stats))
         .route("/api/logout", post(admin::handle_logout))
         .route("/api/auth/check", get(admin::handle_check))
+        .route("/api/auth/totp/setup", post(admin::handle_totp_setup))
+        .route("/api/auth/totp/confirm", post(admin::handle_totp_confirm))
+        .route("/api/auth/totp/disable", post(admin::handle_totp_disable))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin::require_session_mw,

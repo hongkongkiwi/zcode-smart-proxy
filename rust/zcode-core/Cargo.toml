@@ -6,6 +6,9 @@ description = "Protocol core ported from zcode-proxy (Go): model normalization, 
 
 [dependencies]
 base64 = "0.22"
+hmac = "0.12"
+rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.10"
 sha2 = "0.10"

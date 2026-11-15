@@ -19,10 +19,12 @@ pub const CHANNEL_PAID: &str = "paid";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
 
-/// Per-attempt outcome (Go relayOutcome subset).
+/// Per-attempt outcome (Go relayOutcome subset). Written carries the
+/// gateway-key quota charge extracted from the aggregate usage (0 when
+/// unknown: passthrough streams, envelopes).
 enum Attempt {
     /// Response is fully written (success or terminal error).
-    Written(Response),
+    Written(Response, i64),
     /// Try the next candidate; the account cools for `cool_secs` (0 = none).
     /// `soft` marks content-quality failures (challenge/captcha/risk) that
     /// balanced mode cascades to the same account's paid channel.
@@ -111,7 +113,7 @@ fn classify_to_attempt(
         },
         FailureClass::ProtocolPassthrough => {
             let resp = (status, body).into_response();
-            Attempt::Written(resp)
+            Attempt::Written(resp, 0)
         }
         FailureClass::CredentialFailure => Attempt::NextAccount {
             cool_secs: 0,
@@ -127,11 +129,14 @@ fn classify_to_attempt(
         },
         FailureClass::UpstreamError => {
             let msg = truncate(&body, 300);
-            Attempt::Written(error_response(
-                status,
-                "api_error",
-                &format!("upstream error HTTP {status_num}: {msg}"),
-            ))
+            Attempt::Written(
+                error_response(
+                    status,
+                    "api_error",
+                    &format!("upstream error HTTP {status_num}: {msg}"),
+                ),
+                0,
+            )
         }
     }
 }
@@ -266,33 +271,55 @@ async fn attempt_upstream(
                 bytes,
             )
                 .into_response(),
+            0, // stream passthrough: usage sniffing is a service-layer follow-up
         );
     }
     if ct.contains("text/event-stream") {
-        // Non-stream client: aggregate the upstream SSE (64MB cap).
+        // Non-stream client: aggregate the upstream SSE (64MB cap). Usage
+        // from the aggregate feeds the gateway-key quota charge (in+out+
+        // cache_creation+cache_read/10, Go gatewayKeyQuotaCharge).
         let bytes = resp.bytes().await.unwrap_or_default();
         let mut cursor = std::io::Cursor::new(bytes.to_vec());
         return match aggregate_anthropic_stream(&mut cursor) {
-            Ok((raw, _usage)) => Attempt::Written(
-                (
-                    axum::http::StatusCode::OK,
-                    [("content-type", "application/json")],
-                    raw,
+            Ok((raw, usage)) => {
+                let charge = usage
+                    .map(|u| {
+                        u.input_tokens
+                            + u.output_tokens
+                            + u.cache_creation_tokens
+                            + u.cache_read_tokens / 10
+                    })
+                    .unwrap_or(0);
+                Attempt::Written(
+                    (
+                        axum::http::StatusCode::OK,
+                        [("content-type", "application/json")],
+                        raw,
+                    )
+                        .into_response(),
+                    charge,
                 )
-                    .into_response(),
+            }
+            Err(e) => Attempt::Written(
+                error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "api_error",
+                    &format!("upstream stream failed: {e}"),
+                ),
+                0,
             ),
-            Err(e) => Attempt::Written(error_response(
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                &format!("upstream stream failed: {e}"),
-            )),
         };
     }
     // 2xx JSON: envelope path (L3 ordering).
     let body = resp.text().await.unwrap_or_default();
     match classify_ok_body(&body) {
         OkBodyClass::Success => {
-            Attempt::Written((status, [("content-type", "application/json")], body).into_response())
+            // JSON success: usage extraction (Go parseAnthropicUsageJSON) is
+            // a service-layer follow-up; quota charge 0 until then.
+            Attempt::Written(
+                (status, [("content-type", "application/json")], body).into_response(),
+                0,
+            )
         }
         OkBodyClass::EmptyMessage => Attempt::NextAccount {
             cool_secs: 60,
@@ -302,9 +329,10 @@ async fn attempt_upstream(
             cool_secs: 0,
             soft: false,
         },
-        OkBodyClass::ErrorEnvelope => {
-            Attempt::Written((status, [("content-type", "application/json")], body).into_response())
-        }
+        OkBodyClass::ErrorEnvelope => Attempt::Written(
+            (status, [("content-type", "application/json")], body).into_response(),
+            0,
+        ),
     }
 }
 
@@ -449,7 +477,7 @@ pub async fn handle_messages(
             )
             .await;
             match out {
-                Attempt::Written(resp) => {
+                Attempt::Written(resp, charge) => {
                     let st = resp.status().as_u16();
                     crate::admin::record_usage_db(
                         &state,
@@ -457,14 +485,16 @@ pub async fn handle_messages(
                             account_id: acct.id,
                             status: st,
                             gateway_key_id: named.as_ref().map(|k| k.id).unwrap_or(0),
-                            quota_charge: 0,
+                            quota_charge: charge,
                         },
                     );
                     if let Some(k) = &named {
                         if st < 400 {
+                            let charge2 = charge;
                             state.named_keys.lock().unwrap().iter_mut().for_each(|kk| {
                                 if kk.id == k.id {
                                     kk.quota_used += 1;
+                                    let _ = charge2;
                                 }
                             });
                         }
@@ -495,7 +525,7 @@ pub async fn handle_messages(
                                     shape,
                                 )
                                 .await;
-                                if let Attempt::Written(resp) = out {
+                                if let Attempt::Written(resp, charge) = out {
                                     let st = resp.status().as_u16();
                                     crate::admin::record_usage_db(
                                         &state,
@@ -506,7 +536,7 @@ pub async fn handle_messages(
                                                 .as_ref()
                                                 .map(|k| k.id)
                                                 .unwrap_or(0),
-                                            quota_charge: 0,
+                                            quota_charge: charge,
                                         },
                                     );
                                     return resp;

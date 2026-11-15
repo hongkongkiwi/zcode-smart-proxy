@@ -55,6 +55,47 @@ pub async fn handle_login(
         )
             .into_response();
     }
+    // Second factor: when a TOTP secret is enrolled+enabled, the login body
+    // must carry a current TOTP code or an unused recovery code (single-use,
+    // consumed on success). Missing/invalid = 401, same shape as above.
+    if state.setting("totp_enabled").as_deref() == Some("1") {
+        let code = v
+            .get("code")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let mut second_ok = false;
+        if let Some(secret_b32) = state.setting("totp_secret") {
+            if let Some(secret) = zcode_core::base32_decode(&secret_b32) {
+                second_ok = zcode_core::totp_verify(&secret, now_secs(), code);
+            }
+        }
+        if !second_ok {
+            let hashes_raw = state.setting("recovery_codes");
+            let hashes = zcode_core::recovery_codes_from_json(hashes_raw.as_deref());
+            if let Some(rest) = zcode_core::consume_recovery_code(&hashes, code) {
+                {
+                    let db = state.db.lock().unwrap();
+                    store::set_setting(
+                        &db,
+                        "recovery_codes",
+                        &zcode_core::recovery_codes_to_json(&rest),
+                    );
+                }
+                state.settings.lock().unwrap().insert(
+                    "recovery_codes".into(),
+                    zcode_core::recovery_codes_to_json(&rest),
+                );
+                second_ok = true;
+            }
+        }
+        if !second_ok {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "message": "second factor required"})),
+            )
+                .into_response();
+        }
+    }
     let t = token();
     state
         .sessions
@@ -270,6 +311,139 @@ pub fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     format!("{:x}", h.finalize())
+}
+
+/// TOTP enrollment: generate a pending secret + otpauth URL (not enabled
+/// until confirm).
+pub async fn handle_totp_setup(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    _body: String,
+) -> Response {
+    if session_token(&headers)
+        .map(|t| !state.sessions.lock().unwrap().contains_key(&t))
+        .unwrap_or(true)
+    {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let secret = zcode_core::new_totp_secret();
+    let email = state
+        .setting("admin_username")
+        .unwrap_or_else(|| "admin".into());
+    {
+        let db = state.db.lock().unwrap();
+        store::set_setting(&db, "totp_secret_pending", &secret);
+    }
+    state
+        .settings
+        .lock()
+        .unwrap()
+        .insert("totp_secret_pending".into(), secret.clone());
+    (
+        StatusCode::OK,
+        Json(json!({
+            "secret": secret,
+            "otpauth_url": zcode_core::otpauth_url(&secret, &email),
+        })),
+    )
+        .into_response()
+}
+
+/// Confirm enrollment: verify a code against the pending secret, then swap
+/// it in as the active secret, generate recovery codes (shown once).
+pub async fn handle_totp_confirm(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response {
+    if session_token(&headers)
+        .map(|t| !state.sessions.lock().unwrap().contains_key(&t))
+        .unwrap_or(true)
+    {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let code = v
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let Some(secret_b32) = state.setting("totp_secret_pending") else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message": "no pending enrollment"})),
+        )
+            .into_response();
+    };
+    let secret = zcode_core::base32_decode(&secret_b32).unwrap_or_default();
+    if !zcode_core::totp_verify(&secret, now_secs(), code) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"message": "code did not verify"})),
+        )
+            .into_response();
+    }
+    let (plain, hashes) = zcode_core::generate_recovery_codes(10);
+    {
+        let db = state.db.lock().unwrap();
+        store::set_setting(&db, "totp_secret", &secret_b32);
+        store::set_setting(&db, "totp_enabled", "1");
+        store::set_setting(
+            &db,
+            "recovery_codes",
+            &zcode_core::recovery_codes_to_json(&hashes),
+        );
+        store::set_setting(&db, "totp_secret_pending", "");
+    }
+    let mut sm = state.settings.lock().unwrap();
+    sm.insert("totp_secret".into(), secret_b32.clone());
+    sm.insert("totp_enabled".into(), "1".into());
+    sm.insert(
+        "recovery_codes".into(),
+        zcode_core::recovery_codes_to_json(&hashes),
+    );
+    sm.remove("totp_secret_pending");
+    drop(sm);
+    (
+        StatusCode::OK,
+        Json(json!({"enabled": true, "recovery_codes": plain})),
+    )
+        .into_response()
+}
+
+/// Disable 2FA: requires the admin password.
+pub async fn handle_totp_disable(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response {
+    if session_token(&headers)
+        .map(|t| !state.sessions.lock().unwrap().contains_key(&t))
+        .unwrap_or(true)
+    {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let pw = v
+        .get("password")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if !password_ok(state.setting("admin_password_hash"), pw) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"message": "password required to disable"})),
+        )
+            .into_response();
+    }
+    {
+        let db = state.db.lock().unwrap();
+        store::set_setting(&db, "totp_enabled", "0");
+    }
+    state
+        .settings
+        .lock()
+        .unwrap()
+        .insert("totp_enabled".into(), "0".into());
+    (StatusCode::OK, Json(json!({"enabled": false}))).into_response()
 }
 
 /// Minimal admin panel: a single functional page (no build step, no deps)

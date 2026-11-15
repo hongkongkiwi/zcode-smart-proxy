@@ -368,3 +368,99 @@ async fn persistence_round_trip() {
 use auth as _auth_guard;
 #[allow(unused_imports)]
 use engine as _engine_guard;
+
+// ---- TOTP second factor ----
+
+// Enroll -> logout -> password-only login rejected -> code login accepted.
+#[tokio::test]
+async fn totp_second_factor_flow() {
+    let (state, _root) = setup().await;
+    let password = format!("pw-totp-{}", std::process::id());
+    let hash = bcrypt::hash(&password, 10).unwrap();
+    state
+        .settings
+        .lock()
+        .unwrap()
+        .insert("admin_password_hash".into(), hash);
+    let app = zcode_proxy::build_router(state.clone());
+
+    // Login (no 2FA yet) to get an enrollment session.
+    let login_body = json!({"password": password}).to_string();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header("content-type", "application/json")
+        .body(Body::from(login_body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cookie = resp
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    // Setup: pending secret returned.
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/api/auth/totp/setup")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = app.clone().oneshot(req2).await.unwrap();
+    assert_eq!(resp2.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp2.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let secret_b32 = v["secret"].as_str().unwrap().to_string();
+    assert!(v["otpauth_url"]
+        .as_str()
+        .unwrap()
+        .contains("otpauth://totp/"));
+
+    // Confirm with the current code (computed locally from the secret).
+    let secret = zcode_core::base32_decode(&secret_b32).unwrap();
+    let code = zcode_core::totp_now(&secret, zcode_proxy::auth::now_secs());
+    let confirm_body = json!({"code": code}).to_string();
+    let req3 = Request::builder()
+        .method("POST")
+        .uri("/api/auth/totp/confirm")
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(confirm_body))
+        .unwrap();
+    let resp3 = app.clone().oneshot(req3).await.unwrap();
+    assert_eq!(resp3.status(), StatusCode::OK);
+    let bytes3 = axum::body::to_bytes(resp3.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let v3: Value = serde_json::from_slice(&bytes3).unwrap();
+    assert_eq!(v3["enabled"], true);
+    assert_eq!(v3["recovery_codes"].as_array().unwrap().len(), 10);
+
+    // Logout, then password-only login must be rejected (second factor).
+    let req4 = Request::builder()
+        .method("POST")
+        .uri("/api/logout")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp4 = app.clone().oneshot(req4).await.unwrap();
+    assert_eq!(resp4.status(), StatusCode::OK);
+
+    let pw_only = json!({"password": password}).to_string();
+    let (s5, body5) = send(app.clone(), "POST", "/api/login", "", &pw_only).await;
+    assert_eq!(s5, StatusCode::UNAUTHORIZED);
+    assert!(body5["message"].as_str().unwrap().contains("second factor"));
+
+    // Login with the current TOTP code: accepted.
+    let code2 = zcode_core::totp_now(&secret, zcode_proxy::auth::now_secs());
+    let with_code = json!({"password": password, "code": code2}).to_string();
+    let (s6, _body6) = send(app, "POST", "/api/login", "", &with_code).await;
+    assert_eq!(s6, StatusCode::OK);
+}
