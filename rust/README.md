@@ -12,7 +12,13 @@ until the ported core passes the same traffic behind the live service.
 | 2a | Failure-classification ladder (the >=400 order + 2xx envelope path), account selectability, cooldown/risk ladders, gateway-key windows (168-slot ring) + RPM + quota charge | **done, 15 more vectors green (47 total)** |
 | 2b | Channel selection (free-first/balanced/never strategies, sticky sessions, per-phase skip maps), auto-reset decision logic, egress seams | **done, 12 more vectors green (59 total)** |
 | 3 | Egress seams: FingerprintDialer (target rquest) + CaptchaSolver (target chromiumoxide) traits with fail-closed defaults | **seams done; live WAF/browser validation pending** |
-| 4 | Data-plane HTTP surface: axum binary — /v1/messages + shape aliases, count_tokens, models, key auth (root constant-time + named keys w/ RPM/windows/quota/whitelist), free-first ladder with balanced cascade | **done, 6 E2E tests green (65 total)** — admin panel + web UI not ported |
+| 4 | Data-plane HTTP surface: axum binary — /v1/messages + shape aliases, count_tokens, models, key auth, free-first ladder with balanced cascade | **done, 6 E2E tests green** |
+| 5 | Persistence + admin: sqlite (WAL) store, AppState::from_db, session auth (CSPRNG, restart-revokes), bcrypt login, settings whitelist, accounts/usage/stats, /web panel | **done, 3 store + 2 admin E2E green (70 total)** |
+
+Remaining vs the Go service (deploy-time, not portable here): captcha/
+fingerprint live validation against the real WAF, the full 2FA machinery,
+promo auto-claim + reset cron jobs, and the docker image swap on the DO
+droplet.
 
 ## Port contract
 
