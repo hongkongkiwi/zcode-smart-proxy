@@ -10,9 +10,9 @@ until the ported core passes the same traffic behind the live service.
 |-------|-------|-------|
 | 1 | Protocol core, pure functions: model table, biz-code matchers, SSE parser, Anthropic aggregator, count_tokens estimator | **done, 32 acceptance vectors green** |
 | 2a | Failure-classification ladder (the >=400 order + 2xx envelope path), account selectability, cooldown/risk ladders, gateway-key windows (168-slot ring) + RPM + quota charge | **done, 15 more vectors green (47 total)** |
-| 2b | Relay state machine I/O: account pool store, sticky routing, channel selection (free-first/balanced), auto-reset scheduler | not started |
-| 3 | Egress: utls fingerprinting -> `rquest`, rod captcha -> `chromiumoxide` | not started; the two hard dependency ports |
-| 4 | HTTP surface: axum handlers for `/v1/*`, `/api/v1/*` aliases, admin panel + web UI | not started |
+| 2b | Channel selection (free-first/balanced/never strategies, sticky sessions, per-phase skip maps), auto-reset decision logic, egress seams | **done, 12 more vectors green (59 total)** |
+| 3 | Egress seams: FingerprintDialer (target rquest) + CaptchaSolver (target chromiumoxide) traits with fail-closed defaults | **seams done; live WAF/browser validation pending** |
+| 4 | Data-plane HTTP surface: axum binary — /v1/messages + shape aliases, count_tokens, models, key auth (root constant-time + named keys w/ RPM/windows/quota/whitelist), free-first ladder with balanced cascade | **done, 6 E2E tests green (65 total)** — admin panel + web UI not ported |
 
 ## Port contract
 
