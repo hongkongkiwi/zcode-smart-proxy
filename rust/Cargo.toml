@@ -1,0 +1,6 @@
+[workspace]
+members = ["zcode-core"]
+resolver = "2"
+
+[profile.release]
+opt-level = 2

@@ -1,0 +1,10 @@
+[package]
+name = "zcode-core"
+version = "0.1.0"
+edition = "2021"
+description = "Protocol core ported from zcode-proxy (Go): model normalization, biz-code classification, SSE parsing, Anthropic aggregation, token estimation"
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
