@@ -398,7 +398,7 @@ pub async fn handle_messages(
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "api_error",
-            "网关已全局暂停（panic stop），请在管理面板恢复",
+            "gateway is globally paused (panic stop); resume it from the admin panel",
         );
     }
     let named = extension.named.clone();
@@ -635,6 +635,6 @@ pub async fn handle_messages(
     error_response(
         StatusCode::SERVICE_UNAVAILABLE,
         "no_available_account",
-        "所有账号本次尝试均失败，请稍后重试",
+        "all accounts failed for this request; try again later",
     )
 }
