@@ -8,10 +8,11 @@ until the ported core passes the same traffic behind the live service.
 
 | Phase | Scope | State |
 |-------|-------|-------|
-| 1 | Protocol core, pure functions: model table, biz-code matchers, SSE parser, Anthropic aggregator, count_tokens estimator | **this crate, 32/32 acceptance vectors green** |
-| 2 | Relay state machine: account pool, penalty ladders, sticky routing | not started |
+| 1 | Protocol core, pure functions: model table, biz-code matchers, SSE parser, Anthropic aggregator, count_tokens estimator | **done, 32 acceptance vectors green** |
+| 2a | Failure-classification ladder (the >=400 order + 2xx envelope path), account selectability, cooldown/risk ladders, gateway-key windows (168-slot ring) + RPM + quota charge | **done, 15 more vectors green (47 total)** |
+| 2b | Relay state machine I/O: account pool store, sticky routing, channel selection (free-first/balanced), auto-reset scheduler | not started |
 | 3 | Egress: utls fingerprinting -> `rquest`, rod captcha -> `chromiumoxide` | not started; the two hard dependency ports |
-| 4 | HTTP surface: axum handlers for `/v1/*`, `/api/v1/*` aliases, admin panel | not started |
+| 4 | HTTP surface: axum handlers for `/v1/*`, `/api/v1/*` aliases, admin panel + web UI | not started |
 
 ## Port contract
 
