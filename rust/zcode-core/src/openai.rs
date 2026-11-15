@@ -487,3 +487,241 @@ mod tests {
         assert_eq!(out["choices"][0]["finish_reason"], "tool_calls");
     }
 }
+
+/// Go completionsPrompt: string as-is; array of strings joined with blank
+/// lines (multi-sample upstream is unsupported); anything else errors.
+pub fn completions_prompt(v: Option<&Value>) -> Result<String, String> {
+    match v {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(s)) => Ok(s.clone()),
+        Some(Value::Array(items)) => {
+            let mut parts = Vec::with_capacity(items.len());
+            for item in items {
+                match item.as_str() {
+                    Some(s) => parts.push(s.to_string()),
+                    None => return Err("prompt array elements must be strings".into()),
+                }
+            }
+            Ok(parts.join("\n\n"))
+        }
+        Some(_) => Err("prompt must be a string or array of strings".into()),
+    }
+}
+
+/// Go completionsFinish: legacy text_completion has no tool semantics.
+pub fn completions_finish(stop_reason: &str) -> &'static str {
+    if stop_reason == "max_tokens" {
+        "length"
+    } else {
+        "stop"
+    }
+}
+
+/// Go completionsResponse: non-stream text_completion shape; echo=true
+/// prefixes the original prompt.
+pub fn completions_response(
+    model: &str,
+    text: &str,
+    usage: Option<&crate::StreamUsage>,
+    echo: bool,
+    prompt: &str,
+    created: i64,
+) -> Value {
+    let text = if echo { format!("{prompt}{text}") } else { text.to_string() };
+    let (input, output, stop) = usage
+        .map(|u| (u.input_tokens, u.output_tokens, u.stop_reason.clone()))
+        .unwrap_or_default();
+    json!({
+        "id": format!("cmpl-{}", random_hex(12)),
+        "object": "text_completion",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0, "text": text, "logprobs": Value::Null,
+            "finish_reason": completions_finish(&stop),
+        }],
+        "usage": {
+            "prompt_tokens": input, "completion_tokens": output,
+            "total_tokens": input + output,
+        },
+    })
+}
+
+/// Build the /v1/responses output object from an aggregated Anthropic
+/// message (Go responsesResponseWithItems, synthesis path): thinking blocks
+/// become reasoning items, tool_use blocks become function_call items, text
+/// becomes the message item; max_tokens truncation reports incomplete.
+pub fn anthropic_to_responses(body: &Value, response_id: &str, created: i64) -> Value {
+    let model = string(body.get("model"));
+    let mut output: Vec<Value> = Vec::new();
+    let mut text = String::new();
+    let mut thinking = String::new();
+    if let Some(blocks) = body.get("content").and_then(Value::as_array) {
+        for block in blocks {
+            match string(block.get("type")) {
+                "text" => text.push_str(string(block.get("text"))),
+                "thinking" => thinking.push_str(string(block.get("thinking"))),
+                "tool_use" => {
+                    let args = match block.get("input") {
+                        Some(v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".into()),
+                        None => "{}".into(),
+                    };
+                    let call_id = string(block.get("id"));
+                    let call_id = if call_id.is_empty() {
+                        format!("call_{}", random_hex(4))
+                    } else {
+                        call_id.to_owned()
+                    };
+                    output.push(json!({
+                        "id": format!("fc_{}", random_hex(8)), "type": "function_call",
+                        "call_id": call_id, "name": string(block.get("name")),
+                        "arguments": args,
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+    if !thinking.is_empty() {
+        output.push(json!({
+            "id": format!("rs_{}", random_hex(8)), "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": thinking}],
+        }));
+    }
+    if !text.is_empty() || output.is_empty() {
+        output.push(json!({
+            "id": format!("msg_{}", random_hex(8)), "type": "message",
+            "status": "completed", "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }));
+    }
+    let in_tokens = body
+        .get("usage")
+        .and_then(|u| u.get("input_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let out_tokens = body
+        .get("usage")
+        .and_then(|u| u.get("output_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let cache_read = body
+        .get("usage")
+        .and_then(|u| u.get("cache_read_input_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let truncated = string(body.get("stop_reason")) == "max_tokens";
+    let mut usage = json!({
+        "input_tokens": in_tokens, "output_tokens": out_tokens,
+        "total_tokens": in_tokens + out_tokens,
+    });
+    if cache_read > 0 {
+        usage["input_tokens_details"] = json!({"cached_tokens": cache_read});
+    }
+    let mut out = json!({
+        "id": response_id, "object": "response", "created_at": created,
+        "status": if truncated {"incomplete"} else {"completed"},
+        "model": model, "output": output, "output_text": text,
+        "usage": usage,
+    });
+    if truncated {
+        out["incomplete_details"] = json!({"reason": "max_output_tokens"});
+    }
+    out
+}
+
+/// Go /v1/responses input flattening: message/input_text items → chat-like
+/// messages; function_call/output items → assistant tool interactions.
+/// Other item types are skipped; `input_image` errors (Go fails closed).
+pub fn flatten_responses_input(input: &Value) -> Result<Vec<Value>, String> {
+    let items = match input {
+        Value::String(s) => {
+            return Ok(vec![json!({"role": "user", "content": [{"type": "input_text", "text": s}]})]);
+        }
+        Value::Array(a) => a.clone(),
+        _ => return Err("input must be a string or array".into()),
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let it = match item.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        match it.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                let role = it.get("role").and_then(Value::as_str).unwrap_or("user");
+                let mut parts = Vec::new();
+                match it.get("content") {
+                    Some(Value::String(s)) => {
+                        parts.push(json!({"type": if role == "assistant" {"output_text"} else {"input_text"}, "text": s}));
+                    }
+                    Some(Value::Array(arr)) => {
+                        for part in arr {
+                            if let Some(pt) = part.as_object() {
+                                match pt.get("type").and_then(Value::as_str) {
+                                    Some("input_text") | Some("output_text") | Some("text") => {
+                                        parts.push(json!({
+                                            "type": if role == "assistant" {"output_text"} else {"input_text"},
+                                            "text": pt.get("text").cloned().unwrap_or(Value::Null),
+                                        }));
+                                    }
+                                    Some("input_image") => {
+                                        return Err("input_image is not supported by the upstream".into());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                if !parts.is_empty() {
+                    out.push(json!({"role": role, "content": parts}));
+                } else if it.get("content").is_some() {
+                    out.push(json!({"role": role, "content": ""}));
+                }
+            }
+            Some("function_call") => {
+                let name = it.get("name").and_then(Value::as_str).unwrap_or("");
+                if !name.is_empty() {
+                    let args = match it.get("arguments") {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".into()),
+                        None => "{}".into(),
+                    };
+                    out.push(json!({
+                        "role": "assistant",
+                        "content": [],
+                        "tool_calls": [{"id": it.get("call_id").cloned().unwrap_or(json!(format!("call_{}", random_hex(4)))),
+                            "type": "function",
+                            "function": {"name": name, "arguments": args}}],
+                    }));
+                }
+            }
+            Some("function_call_output") => {
+                if let Some(call_id) = it.get("call_id").and_then(Value::as_str) {
+                    let output = match it.get("output") {
+                        Some(Value::String(s)) => json!(s),
+                        Some(v @ Value::Array(_)) => v.clone(),
+                        _ => json!(""),
+                    };
+                    out.push(json!({
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": call_id, "content": output}],
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Go responsesResponse usage of stop_reason for truncation semantics on
+/// flattened input bodies.
+pub fn flatten_responses_body(body: &Value) -> Result<Vec<Value>, String> {
+    match body.get("input") {
+        Some(v) => flatten_responses_input(v),
+        None => Err("input is required".into()),
+    }
+}
