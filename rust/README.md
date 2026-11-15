@@ -1,39 +1,49 @@
-# zcode-proxy Rust port
+# Rust migration status
 
-Test-port-first migration of the Go proxy (~45k LOC) to Rust. The Go
-deployment on the DO droplet stays the system of record; nothing here ships
-until the ported core passes the same traffic behind the live service.
+The Rust implementation is incomplete. The Go service remains the production
+implementation. Do not replace it with the Rust binary or point Rust at the
+production Go database.
 
-## Phase status
+## Verified increments
 
-| Phase | Scope | State |
-|-------|-------|-------|
-| 1 | Protocol core, pure functions: model table, biz-code matchers, SSE parser, Anthropic aggregator, count_tokens estimator | **done, 32 acceptance vectors green** |
-| 2a | Failure-classification ladder (the >=400 order + 2xx envelope path), account selectability, cooldown/risk ladders, gateway-key windows (168-slot ring) + RPM + quota charge | **done, 15 more vectors green (47 total)** |
-| 2b | Channel selection (free-first/balanced/never strategies, sticky sessions, per-phase skip maps), auto-reset decision logic, egress seams | **done, 12 more vectors green (59 total)** |
-| 3 | Egress seams: FingerprintDialer (target rquest) + CaptchaSolver (target chromiumoxide) traits with fail-closed defaults | **seams done; live WAF/browser validation pending** |
-| 4 | Data-plane HTTP surface: axum binary — /v1/messages + shape aliases, count_tokens, models, key auth, free-first ladder with balanced cascade | **done, 6 E2E tests green** |
-| 5 | Persistence + admin: sqlite (WAL) store, AppState::from_db, session auth (CSPRNG, restart-revokes), bcrypt login, settings whitelist, accounts/usage/stats, /web panel | **done, 3 store + 2 admin E2E green (70 total)** |
+- Protocol helpers, model aliases, response aggregation, and failure classifiers
+  have Rust tests. These are selected cases, not a port of the full Go suite.
+- Account selection and admission controls have router-level regressions.
+  Disabled accounts are excluded, paid opt-out and cooldowns are enforced,
+  pause blocks generation, and settings reads exclude private values.
+- Supported control settings are validated before writes. Selection changes
+  apply without restarting, and balanced fallback avoids repeated paid calls.
+- The experimental service has a separate SQLite schema, a basic admin API,
+  and TOTP enrollment. These do not yet provide Go storage or authentication
+  compatibility.
 
-Remaining vs the Go service (deploy-time, not portable here): captcha/
-fingerprint live validation against the real WAF, the full 2FA machinery,
-promo auto-claim + reset cron jobs, and the docker image swap on the DO
-droplet.
+At commit `5c8a252`, workspace tests reported 95 passed and strict Clippy
+completed without warnings. Those checks do not establish feature parity.
 
-## Port contract
+## Remaining work
 
-- Byte-faithful semantics: every module doc comment names its Go origin file
-  and the invariants that must not drift (the 2026-10-26 dead-branch fix, the
-  1005 exhaustion family, the 3104/3106 ticket-death codes, F2 truncation).
-- The Go test tables are the acceptance gate; each ported vector is marked
-  with its Go test name. Behavior differences found while porting are ported
-  as-is with a comment (e.g. `strings.Contains` phrase matching in
-  `is_exhausted_error`), never silently fixed.
-- Phase 1 is pure functions only: no async, no I/O, deps limited to serde
-  and base64.
+1. Incremental streaming, bounded response handling, and durable token-based
+   gateway-key accounting for every response path.
+2. Authentication parity: login lockout, CSRF protection, password step-up,
+   enrollment expiry, atomic recovery-code consumption, passkeys, secure-cookie
+   policy, and safe panel rendering.
+3. Compatible encrypted storage, explicit schema migration, error propagation,
+   and recovery tested against synthetic Go database and vault fixtures.
+4. Account CRUD, import/export, OAuth, credential refresh, gateway-key management,
+   quota refresh, and the existing admin UI contracts.
+5. OpenAI chat/completions/responses protocols, async ticket and highspeed-card
+   workflows, model retrieval, and the full upstream-header policy.
+6. Actual billing claim/reset execution and scheduled automation. Request
+   constructors and pure decision helpers are not running cron jobs.
+7. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits
+   and no-op implementations are placeholders, not completed integrations.
+8. Release packaging, rollback-safe migration, side-by-side traffic validation,
+   and a production cutover only after parity checks pass.
 
-## Running
+## Local checks
 
-```bash
-cd rust && cargo test
+```sh
+cargo test --manifest-path rust/Cargo.toml --workspace
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo fmt --manifest-path rust/Cargo.toml --all --check
 ```
