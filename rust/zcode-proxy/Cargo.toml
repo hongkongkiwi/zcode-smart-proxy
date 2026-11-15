@@ -9,6 +9,8 @@ name = "zcode-proxy-rs"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
 axum = "0.7"
 futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream"] }
@@ -21,6 +23,7 @@ rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tower = { version = "0.5", features = ["util"] }
 zcode-core = { path = "../zcode-core" }
+zeroize = "1"
 
 [dev-dependencies]
 bcrypt = "0.15"

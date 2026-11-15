@@ -1,0 +1,156 @@
+{
+  "notice": "PUBLIC SYNTHETIC TEST DATA ONLY. All secrets, nonces, tags and plaintexts may be published. Never use these keys outside tests.",
+  "format": "vault1: + unpadded base64url(nonce12) + . + unpadded base64url(tag16) + . + unpadded base64url(ciphertext); AES-256-GCM, no AAD",
+  "key_derivation": "SHA-256 of the UTF-8 secret string. A 64-hex-character vault.key is the SECRET STRING, not a hex-decoded AES key.",
+  "producer": "EncryptCredential and DecryptCredential from credential_crypto.go; vault.go's prefix-only mapping. OS-random nonces generated once and recorded; no live DB, keyfile or environment secret used.",
+  "regenerate": "UPDATE_RUST_VAULT_FIXTURE=1 go test -count=1 -run '^TestRustVaultFixture$' -v credential_crypto.go rust_vault_fixture_test.go",
+  "verify": "go test -count=1 -run '^TestRustVaultFixture$' -v credential_crypto.go rust_vault_fixture_test.go",
+  "source_revision": "8baae3b4549a1235d7150975b5e17a2a16cdd678",
+  "source_sha256": {
+    "credential_crypto.go": "ad273d6e3bf9664704de6695fe9ef4e207bc17e2324a12c318cec7ae295a82a0",
+    "vault.go": "0af903bbcf283de1ee771b521c55690d246f9e63d2d31f6e999e6472fba0d94f"
+  },
+  "public_secrets": {
+    "public_hex_secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "public_utf8_secret": "PUBLIC TEST ONLY: 密钥 café",
+    "public_wrong_secret": "PUBLIC TEST ONLY: deliberately wrong vault key"
+  },
+  "derived_key_hex": {
+    "public_hex_secret": "6c86c6aac5fb24bcf5d9939cb7d7d5645ce39418f449e03b262dd4fa14b4b92b",
+    "public_utf8_secret": "d7a3dceb4321e595bd188f220d96986072db8a19c688ad72d3a7d6c1122be437",
+    "public_wrong_secret": "0525ca0ea0898764855032022da2d375b200643e914241b799907afe2234921d"
+  },
+  "decrypt_cases": [
+    {
+      "id": "hex_secret_utf8",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:C2d429ahCcvzQvr4.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "plaintext": "PUBLIC TEST ONLY: 凭证 café é\nline 2\u0000end",
+      "expect_error": false,
+      "nonce_b64url": "C2d429ahCcvzQvr4",
+      "tag_b64url": "jrgrQdaCPIqXOJUZ1C-cPw",
+      "ciphertext_b64url": "U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU"
+    },
+    {
+      "id": "hex_secret_encrypted_empty",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:_Xnu-QgGDpVqGxVp.m8CNztfEOJxIqc4D3H0wPw.",
+      "plaintext": "",
+      "expect_error": false,
+      "nonce_b64url": "_Xnu-QgGDpVqGxVp",
+      "tag_b64url": "m8CNztfEOJxIqc4D3H0wPw",
+      "ciphertext_b64url": ""
+    },
+    {
+      "id": "utf8_secret",
+      "secret_id": "public_utf8_secret",
+      "value": "vault1:1mtEFazN54rATkw5.21YalxcdKdLVSUVbT8oixw.9Zfa6JfhELpl9EztDgdaP4zJIxe6xlkR1ro3dKkScNzl",
+      "plaintext": "PUBLIC TEST ONLY: synthetic token",
+      "expect_error": false,
+      "nonce_b64url": "1mtEFazN54rATkw5",
+      "tag_b64url": "21YalxcdKdLVSUVbT8oixw",
+      "ciphertext_b64url": "9Zfa6JfhELpl9EztDgdaP4zJIxe6xlkR1ro3dKkScNzl"
+    },
+    {
+      "id": "tampered_tag",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:C2d429ahCcvzQvr4.j7grQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expect_error": true
+    },
+    {
+      "id": "wrong_key",
+      "secret_id": "public_wrong_secret",
+      "value": "vault1:C2d429ahCcvzQvr4.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expect_error": true
+    },
+    {
+      "id": "malformed_prefix_only",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:",
+      "expect_error": true
+    },
+    {
+      "id": "malformed_extra_segment",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:C2d429ahCcvzQvr4.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU.extra",
+      "expect_error": true
+    },
+    {
+      "id": "malformed_nonce_encoding",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:!.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expect_error": true
+    },
+    {
+      "id": "malformed_nonce_length",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:AA.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expect_error": true
+    },
+    {
+      "id": "malformed_tag_length",
+      "secret_id": "public_hex_secret",
+      "value": "vault1:C2d429ahCcvzQvr4.AA.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expect_error": true
+    },
+    {
+      "id": "legacy_plaintext",
+      "secret_id": "public_hex_secret",
+      "value": "PUBLIC TEST ONLY: legacy plaintext 凭证",
+      "plaintext": "PUBLIC TEST ONLY: legacy plaintext 凭证",
+      "expect_error": false
+    },
+    {
+      "id": "legacy_empty",
+      "secret_id": "public_hex_secret",
+      "value": "",
+      "plaintext": "",
+      "expect_error": false
+    },
+    {
+      "id": "legacy_near_prefix",
+      "secret_id": "public_hex_secret",
+      "value": "vault1",
+      "plaintext": "vault1",
+      "expect_error": false
+    },
+    {
+      "id": "legacy_other_version",
+      "secret_id": "public_hex_secret",
+      "value": "vault2:legacy public text",
+      "plaintext": "vault2:legacy public text",
+      "expect_error": false
+    }
+  ],
+  "encrypt_cases_validation": "Source-derived vaultEncrypt contract from vault.go, not executed by the file-list Go verification command. EncryptCredential itself encrypts empty input; vaultEncrypt returns empty unchanged.",
+  "encrypt_cases": [
+    {
+      "id": "empty_passthrough",
+      "secret_id": "public_hex_secret",
+      "input": "",
+      "expected": "",
+      "expect_error": false
+    },
+    {
+      "id": "same_key_ciphertext_passthrough",
+      "secret_id": "public_hex_secret",
+      "input": "vault1:C2d429ahCcvzQvr4.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expected": "vault1:C2d429ahCcvzQvr4.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expect_error": false
+    },
+    {
+      "id": "wrong_key_ciphertext_rejected",
+      "secret_id": "public_wrong_secret",
+      "input": "vault1:C2d429ahCcvzQvr4.jrgrQdaCPIqXOJUZ1C-cPw.U2FcqH3d31vCzXyJaKjin-fDyAANw08aXDAkVNlF1wrqscqHSZabTiWDNjfU",
+      "expected": "",
+      "expect_error": true
+    },
+    {
+      "id": "malformed_ciphertext_rejected",
+      "secret_id": "public_hex_secret",
+      "input": "vault1:",
+      "expected": "",
+      "expect_error": true
+    }
+  ]
+}

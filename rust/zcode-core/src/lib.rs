@@ -15,6 +15,7 @@ pub mod egress;
 pub mod estimate;
 pub mod gateway;
 pub mod models;
+pub mod openai;
 pub mod selection;
 pub mod sse;
 pub mod totp;
