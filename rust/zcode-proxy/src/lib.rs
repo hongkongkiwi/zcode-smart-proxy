@@ -6,6 +6,7 @@ pub mod auth;
 pub mod engine;
 pub mod state;
 pub mod store;
+mod streaming;
 
 use std::sync::Arc;
 

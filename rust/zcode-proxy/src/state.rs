@@ -54,6 +54,8 @@ pub struct AppState {
     pub usage: Mutex<Vec<UsageRecord>>,
 }
 
+pub const MAX_MEMORY_USAGE_RECORDS: usize = 1024;
+
 #[derive(Clone, Debug)]
 pub struct UsageRecord {
     pub account_id: i64,
@@ -132,7 +134,7 @@ impl AppState {
         Self {
             root_key,
             upstream,
-            db: Mutex::new(rusqlite::Connection::open_in_memory().expect("in-memory db")),
+            db: Mutex::new(store::open(":memory:")),
             accounts: Mutex::new(Vec::new()),
             creds: Mutex::new(HashMap::new()),
             named_keys: Mutex::new(Vec::new()),

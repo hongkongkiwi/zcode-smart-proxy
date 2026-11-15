@@ -19,16 +19,18 @@ pub const CHANNEL_PAID: &str = "paid";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
 
-/// Per-attempt outcome (Go relayOutcome subset). Written carries the
-/// gateway-key quota charge extracted from the aggregate usage (0 when
-/// unknown: passthrough streams, envelopes).
+/// Terminal responses carry a token charge; streaming responses defer accounting to body completion.
 enum Attempt {
     /// Response is fully written (success or terminal error).
     Written(Response, i64),
+    Streaming(reqwest::Response),
     /// Try the next candidate; the account cools for `cool_secs` (0 = none).
     /// `soft` marks content-quality failures (challenge/captcha/risk) that
     /// balanced mode cascades to the same account's paid channel.
-    NextAccount { cool_secs: u64, soft: bool },
+    NextAccount {
+        cool_secs: u64,
+        soft: bool,
+    },
 }
 
 fn endpoint_for(state: &AppState, channel: &str) -> String {
@@ -252,7 +254,18 @@ async fn attempt_upstream(
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let body = resp.text().await.unwrap_or_default();
+        let body = match crate::streaming::collect_bounded(resp, None)
+            .await
+            .and_then(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
+        {
+            Ok(body) => body,
+            Err(error) => {
+                return Attempt::Written(
+                    error_response(StatusCode::BAD_GATEWAY, "api_error", &error),
+                    0,
+                )
+            }
+        };
         return classify_to_attempt(status, cf, ct, body, shape);
     }
     let ct = resp
@@ -262,34 +275,32 @@ async fn attempt_upstream(
         .unwrap_or("")
         .to_string();
     if ct.contains("text/event-stream") && want_stream {
-        // Stream passthrough (usage sniffing lands with the record call).
-        let bytes = resp.bytes().await.unwrap_or_default();
-        return Attempt::Written(
-            (
-                axum::http::StatusCode::OK,
-                [("content-type", "text/event-stream")],
-                bytes,
-            )
-                .into_response(),
-            0, // stream passthrough: usage sniffing is a service-layer follow-up
-        );
+        return Attempt::Streaming(resp);
     }
     if ct.contains("text/event-stream") {
         // Non-stream client: aggregate the upstream SSE (64MB cap). Usage
         // from the aggregate feeds the gateway-key quota charge (in+out+
         // cache_creation+cache_read/10, Go gatewayKeyQuotaCharge).
-        let bytes = resp.bytes().await.unwrap_or_default();
-        let mut cursor = std::io::Cursor::new(bytes.to_vec());
+        let mut sniff = crate::streaming::UsageSniffer::default();
+        let bytes = match crate::streaming::collect_bounded(resp, Some(&mut sniff)).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Attempt::Written(
+                    error_response(StatusCode::BAD_GATEWAY, "api_error", &error),
+                    sniff.charge(),
+                )
+            }
+        };
+        if let Some(error) = sniff.failure() {
+            return Attempt::Written(
+                error_response(StatusCode::BAD_GATEWAY, "api_error", error),
+                sniff.charge(),
+            );
+        }
+        let mut cursor = std::io::Cursor::new(bytes);
         return match aggregate_anthropic_stream(&mut cursor) {
-            Ok((raw, usage)) => {
-                let charge = usage
-                    .map(|u| {
-                        u.input_tokens
-                            + u.output_tokens
-                            + u.cache_creation_tokens
-                            + u.cache_read_tokens / 10
-                    })
-                    .unwrap_or(0);
+            Ok((raw, _)) => {
+                let charge = sniff.charge();
                 Attempt::Written(
                     (
                         axum::http::StatusCode::OK,
@@ -306,19 +317,29 @@ async fn attempt_upstream(
                     "api_error",
                     &format!("upstream stream failed: {e}"),
                 ),
-                0,
+                sniff.charge(),
             ),
         };
     }
     // 2xx JSON: envelope path (L3 ordering).
-    let body = resp.text().await.unwrap_or_default();
+    let body = match crate::streaming::collect_bounded(resp, None)
+        .await
+        .and_then(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
+    {
+        Ok(body) => body,
+        Err(error) => {
+            return Attempt::Written(
+                error_response(StatusCode::BAD_GATEWAY, "api_error", &error),
+                0,
+            )
+        }
+    };
     match classify_ok_body(&body) {
         OkBodyClass::Success => {
-            // JSON success: usage extraction (Go parseAnthropicUsageJSON) is
-            // a service-layer follow-up; quota charge 0 until then.
+            let charge = crate::streaming::json_charge(body.as_bytes());
             Attempt::Written(
                 (status, [("content-type", "application/json")], body).into_response(),
-                0,
+                charge,
             )
         }
         OkBodyClass::EmptyMessage => Attempt::NextAccount {
@@ -339,6 +360,32 @@ async fn attempt_upstream(
 use axum::Json;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+fn terminal_response(
+    state: &Arc<AppState>,
+    account_id: i64,
+    gateway_key_id: i64,
+    response: Response,
+    charge: i64,
+) -> Response {
+    if let Err(error) = crate::admin::record_usage_db(
+        state,
+        UsageRecord {
+            account_id,
+            status: response.status().as_u16(),
+            gateway_key_id,
+            quota_charge: charge,
+        },
+    ) {
+        eprintln!("usage accounting failed: {error}");
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            "durable usage accounting failed",
+        );
+    }
+    response
+}
 
 /// POST /v1/messages (+ shape aliases): the free-first fallback ladder.
 pub async fn handle_messages(
@@ -497,28 +544,21 @@ pub async fn handle_messages(
             .await;
             match out {
                 Attempt::Written(resp, charge) => {
-                    let st = resp.status().as_u16();
-                    crate::admin::record_usage_db(
+                    return terminal_response(
                         &state,
-                        UsageRecord {
-                            account_id: acct.id,
-                            status: st,
-                            gateway_key_id: named.as_ref().map(|k| k.id).unwrap_or(0),
-                            quota_charge: charge,
-                        },
+                        acct.id,
+                        named.as_ref().map(|k| k.id).unwrap_or(0),
+                        resp,
+                        charge,
                     );
-                    if let Some(k) = &named {
-                        if st < 400 {
-                            let charge2 = charge;
-                            state.named_keys.lock().unwrap().iter_mut().for_each(|kk| {
-                                if kk.id == k.id {
-                                    kk.quota_used += 1;
-                                    let _ = charge2;
-                                }
-                            });
-                        }
-                    }
-                    return resp;
+                }
+                Attempt::Streaming(resp) => {
+                    return crate::streaming::response(
+                        resp,
+                        state.clone(),
+                        acct.id,
+                        named.as_ref().map(|k| k.id).unwrap_or(0),
+                    );
                 }
                 Attempt::NextAccount { cool_secs, soft } => {
                     if cool_secs > 0 {
@@ -565,21 +605,25 @@ pub async fn handle_messages(
                                         });
                                     }
                                 }
-                                if let Attempt::Written(resp, charge) = out {
-                                    let st = resp.status().as_u16();
-                                    crate::admin::record_usage_db(
-                                        &state,
-                                        UsageRecord {
-                                            account_id: acct.id,
-                                            status: st,
-                                            gateway_key_id: named
-                                                .as_ref()
-                                                .map(|k| k.id)
-                                                .unwrap_or(0),
-                                            quota_charge: charge,
-                                        },
-                                    );
-                                    return resp;
+                                match out {
+                                    Attempt::Written(resp, charge) => {
+                                        return terminal_response(
+                                            &state,
+                                            acct.id,
+                                            named.as_ref().map(|k| k.id).unwrap_or(0),
+                                            resp,
+                                            charge,
+                                        )
+                                    }
+                                    Attempt::Streaming(resp) => {
+                                        return crate::streaming::response(
+                                            resp,
+                                            state.clone(),
+                                            acct.id,
+                                            named.as_ref().map(|k| k.id).unwrap_or(0),
+                                        )
+                                    }
+                                    Attempt::NextAccount { .. } => {}
                                 }
                             }
                         }

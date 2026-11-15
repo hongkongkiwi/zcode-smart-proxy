@@ -308,21 +308,39 @@ pub async fn handle_stats(
         .into_response()
 }
 
-/// Admin-side usage insert helper shared with the engine (records to DB +
-/// memory). Kept here so the engine's data path stays HTTP-only.
-pub fn record_usage_db(state: &AppState, rec: UsageRecord) {
-    {
-        let db = state.db.lock().unwrap();
-        store::insert_usage(
-            &db,
-            now_secs(),
-            rec.account_id,
-            rec.status,
-            rec.gateway_key_id,
-            rec.quota_charge,
-        );
+/// Publish memory mirrors only after the usage row and key debit commit.
+pub fn record_usage_db(state: &AppState, rec: UsageRecord) -> rusqlite::Result<()> {
+    let mut db = state.db.lock().unwrap();
+    let balance = store::record_usage(&mut db, now_secs(), &rec)?;
+    if rec.gateway_key_id > 0 {
+        if balance.is_none() {
+            eprintln!(
+                "usage recorded without durable key debit: missing key {}",
+                rec.gateway_key_id
+            );
+        }
+        if let Some(key) = state
+            .named_keys
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|key| key.id == rec.gateway_key_id)
+        {
+            if let Some(balance) = balance {
+                key.quota_used = balance;
+            } else {
+                // Legacy fixtures inject synthetic keys with no durable row.
+                key.quota_used += rec.quota_charge;
+            }
+        }
     }
-    state.usage.lock().unwrap().push(rec);
+    let mut usage = state.usage.lock().unwrap();
+    usage.push(rec);
+    let excess = usage
+        .len()
+        .saturating_sub(crate::state::MAX_MEMORY_USAGE_RECORDS);
+    usage.drain(..excess);
+    Ok(())
 }
 
 pub fn sha256_hex(s: &str) -> String {
@@ -537,4 +555,37 @@ if (!ok) { /* session may still be valid: probe */ j('/api/auth/check').then(asy
         html,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn memory_usage_keeps_newest_records_and_database_keeps_all() {
+        let state = AppState::new(String::new(), AppState::upstream_from_env());
+        let total = crate::state::MAX_MEMORY_USAGE_RECORDS + 7;
+        for index in 0..total {
+            record_usage_db(
+                &state,
+                UsageRecord {
+                    account_id: index as i64,
+                    status: 200,
+                    gateway_key_id: 0,
+                    quota_charge: 1,
+                },
+            )
+            .unwrap();
+        }
+        let usage = state.usage.lock().unwrap();
+        assert_eq!(usage.len(), crate::state::MAX_MEMORY_USAGE_RECORDS);
+        assert_eq!(
+            usage.iter().map(|rec| rec.account_id).collect::<Vec<_>>(),
+            (7..total as i64).collect::<Vec<_>>()
+        );
+        let records = store::list_usage(&state.db.lock().unwrap(), total as i64 + 1);
+        assert_eq!(records.len(), total);
+        assert_eq!(records.first().unwrap().1, total as i64 - 1);
+        assert_eq!(records.last().unwrap().1, 0);
+    }
 }

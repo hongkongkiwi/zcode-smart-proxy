@@ -236,6 +236,44 @@ pub fn insert_usage(
     );
 }
 
+/// Returns the committed key balance, or None for root/synthetic keys absent from storage.
+pub fn record_usage(
+    conn: &mut Connection,
+    created_at: i64,
+    rec: &crate::state::UsageRecord,
+) -> rusqlite::Result<Option<i64>> {
+    use rusqlite::OptionalExtension;
+
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO usage_records(created_at, account_id, status, gateway_key_id, quota_charge)
+         VALUES(?1,?2,?3,?4,?5)",
+        rusqlite::params![
+            created_at,
+            rec.account_id,
+            rec.status,
+            rec.gateway_key_id,
+            rec.quota_charge
+        ],
+    )?;
+    let balance = if rec.gateway_key_id > 0 {
+        tx.execute(
+            "UPDATE gateway_keys SET quota_used = quota_used + ?1 WHERE id = ?2",
+            rusqlite::params![rec.quota_charge, rec.gateway_key_id],
+        )?;
+        tx.query_row(
+            "SELECT quota_used FROM gateway_keys WHERE id = ?1",
+            [rec.gateway_key_id],
+            |row| row.get(0),
+        )
+        .optional()?
+    } else {
+        None
+    };
+    tx.commit()?;
+    Ok(balance)
+}
+
 pub fn list_usage(conn: &Connection, limit: i64) -> Vec<(i64, i64, u16, i64, i64)> {
     let mut stmt = match conn.prepare(
         "SELECT created_at, account_id, status, gateway_key_id, quota_charge
@@ -306,6 +344,26 @@ mod tests {
         assert_eq!(list_accounts(&conn)[0].0.status, "cooling");
         delete_account(&conn, id);
         assert!(list_accounts(&conn).is_empty());
+    }
+
+    #[test]
+    fn failed_debit_rolls_back_usage_row() {
+        let mut conn = open(":memory:");
+        conn.execute_batch(
+            "CREATE TRIGGER fail_debit BEFORE UPDATE ON gateway_keys
+            BEGIN SELECT RAISE(FAIL, 'debit unavailable'); END;
+            INSERT INTO gateway_keys(name, key_hash) VALUES('test', 'hash');",
+        )
+        .unwrap();
+        let rec = crate::state::UsageRecord {
+            account_id: 1,
+            gateway_key_id: 1,
+            status: 200,
+            quota_charge: 45,
+        };
+        assert!(record_usage(&mut conn, 1000, &rec).is_err());
+        assert!(list_usage(&conn, 10).is_empty());
+        assert_eq!(list_gateway_keys(&conn)[0].quota_used, 0);
     }
 
     #[test]

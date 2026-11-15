@@ -24,7 +24,7 @@ pub enum SseParseError {
 
 /// Incremental parser handling frames split across chunks.
 pub struct SseParser {
-    buf: String,
+    buf: Vec<u8>,
     bom_done: bool,
 }
 
@@ -37,7 +37,7 @@ impl Default for SseParser {
 impl SseParser {
     pub fn new() -> Self {
         Self {
-            buf: String::new(),
+            buf: Vec::new(),
             bom_done: false,
         }
     }
@@ -45,51 +45,32 @@ impl SseParser {
     /// Feed a chunk, invoking `fn` for each complete event. Returns Overflow
     /// (buffer reset) when the framing cap trips.
     pub fn feed(&mut self, chunk: &[u8], f: &mut dyn FnMut(SseEvent)) -> Result<(), SseParseError> {
-        let mut chunk = chunk;
-        if !self.bom_done {
-            self.bom_done = true;
-            if chunk.len() >= 3 && chunk[0] == 0xEF && chunk[1] == 0xBB && chunk[2] == 0xBF {
-                chunk = &chunk[3..];
+        for &byte in chunk {
+            if self.buf.len() == MAX_SSE_BUFFER {
+                self.buf.clear();
+                return Err(SseParseError::Overflow);
             }
-        }
-        // Lossy conversion matches the Go strings.Builder byte-append for
-        // well-formed UTF-8 streams; malformed bytes stay isolated per chunk
-        // (the Go path never sees them inside JSON payloads either).
-        self.buf.push_str(&String::from_utf8_lossy(chunk));
-        self.drain(f);
-        if self.buf.len() > MAX_SSE_BUFFER {
-            self.buf.clear();
-            return Err(SseParseError::Overflow);
+            self.buf.push(byte);
+            if self.buf.ends_with(b"\n\n") || self.buf.ends_with(b"\r\n\r\n") {
+                self.flush(f);
+            }
         }
         Ok(())
     }
 
-    fn drain(&mut self, f: &mut dyn FnMut(SseEvent)) {
-        loop {
-            let s = self.buf.as_str();
-            let idx_lf = s.find("\n\n");
-            let idx_crlf = s.find("\r\n\r\n");
-            let (idx, width) = match (idx_lf, idx_crlf) {
-                (Some(lf), Some(crlf)) if lf <= crlf => (lf, 2),
-                (Some(_), Some(crlf)) => (crlf, 4),
-                (Some(lf), None) => (lf, 2),
-                (None, Some(crlf)) => (crlf, 4),
-                (None, None) => return,
-            };
-            let block: String = self.buf.drain(..idx + width).collect();
-            let block = block[..idx].to_string();
-            if let Some(ev) = parse_sse_block(&block) {
+    /// Decode only complete frames so split UTF-8 and BOM bytes stay intact.
+    pub fn flush(&mut self, f: &mut dyn FnMut(SseEvent)) {
+        let mut frame = self.buf.as_slice();
+        if !self.bom_done {
+            self.bom_done = true;
+            frame = frame.strip_prefix(b"\xef\xbb\xbf").unwrap_or(frame);
+        }
+        if let Ok(block) = std::str::from_utf8(frame) {
+            if let Some(ev) = parse_sse_block(block) {
                 f(ev);
             }
         }
-    }
-
-    /// Parse any trailing buffer content at EOF (Go flush).
-    pub fn flush(&mut self, f: &mut dyn FnMut(SseEvent)) {
-        let tail = std::mem::take(&mut self.buf);
-        if let Some(ev) = parse_sse_block(&tail) {
-            f(ev);
-        }
+        self.buf.clear();
     }
 }
 
@@ -109,8 +90,8 @@ fn parse_sse_block(block: &str) -> Option<SseEvent> {
         return None;
     }
     let data: Value = match serde_json::from_str(&data_str) {
-        Ok(v) => v,
-        Err(_) => return None,
+        Ok(v @ (Value::Object(_) | Value::Null)) => v,
+        _ => return None,
     };
     let mut event_val = event;
     if event_val.is_empty() && is_data_error_frame(&data) {
@@ -218,6 +199,18 @@ mod tests {
     }
 
     #[test]
+    fn only_objects_and_named_null_events_are_accepted() {
+        for data in ["1", "true", "\"text\"", "[]", "[{}]"] {
+            assert!(parse_sse_block(&format!("event: message_stop\ndata: {data}")).is_none());
+        }
+        assert!(parse_sse_block("data: null").is_none());
+        assert!(parse_sse_block("data: {}").is_some());
+        let event = parse_sse_block("event: message_stop\ndata: null").unwrap();
+        assert_eq!(event.event, "message_stop");
+        assert!(event.data.is_null());
+    }
+
+    #[test]
     fn malformed_data_dropped() {
         let mut p = SseParser::new();
         let evs = collect(&mut p, vec![b"event: x\ndata: not-json\n\n"]);
@@ -233,6 +226,15 @@ mod tests {
         );
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[0].data["a"], 1);
+    }
+
+    #[test]
+    fn split_unicode_and_bom_preserved() {
+        let bytes = "\u{feff}data: {\"text\":\"香港 🦀\"}\n\n".as_bytes();
+        let mut parser = SseParser::new();
+        let events = collect(&mut parser, bytes.chunks(1).collect());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data["text"], "香港 🦀");
     }
 
     #[test]
