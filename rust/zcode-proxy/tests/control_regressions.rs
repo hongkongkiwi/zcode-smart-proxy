@@ -34,7 +34,11 @@ impl Fixture {
     async fn new(free_failure: bool, paid_failure: bool) -> Self {
         Self::with_paid_status(
             free_failure,
-            if paid_failure { StatusCode::TOO_MANY_REQUESTS } else { StatusCode::OK },
+            if paid_failure {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::OK
+            },
         )
         .await
     }
@@ -71,10 +75,7 @@ impl Fixture {
                     async move {
                         c.fetch_add(1, Ordering::SeqCst);
                         if paid_status != StatusCode::OK {
-                            (
-                                paid_status,
-                                Json(json!({"error":{"message":"rate limit"}})),
-                            )
+                            (paid_status, Json(json!({"error":{"message":"rate limit"}})))
                         } else {
                             (
                                 StatusCode::OK,
@@ -134,7 +135,14 @@ impl Fixture {
         let mut accounts = self.state.accounts.lock().unwrap();
         accounts[0].zcode_jwt.clear();
         accounts[0].paid_fallback = paid_fallback;
-        self.state.creds.lock().unwrap().get_mut(&1).unwrap().zcode_jwt.clear();
+        self.state
+            .creds
+            .lock()
+            .unwrap()
+            .get_mut(&1)
+            .unwrap()
+            .zcode_jwt
+            .clear();
     }
     async fn put(&self, body: Value) -> StatusCode {
         let req = Request::builder()
@@ -180,9 +188,16 @@ async fn pure_key_opt_out_is_not_used_in_default_or_balanced_mode() {
         let f = Fixture::new(false, false).await;
         f.pure_key_account(false);
         if let Some(mode) = mode {
-            assert_eq!(f.put(json!({"paid_fallback_mode":mode})).await, StatusCode::OK);
+            assert_eq!(
+                f.put(json!({"paid_fallback_mode":mode})).await,
+                StatusCode::OK
+            );
         }
-        assert_eq!(f.message(None).await, StatusCode::SERVICE_UNAVAILABLE, "{mode:?}");
+        assert_eq!(
+            f.message(None).await,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{mode:?}"
+        );
         assert_eq!(f.free.load(Ordering::SeqCst), 0, "{mode:?}");
         assert_eq!(f.paid.load(Ordering::SeqCst), 0, "{mode:?}");
     }
@@ -194,9 +209,16 @@ async fn pure_key_unauthorized_paid_attempt_is_not_repeated() {
         let f = Fixture::with_paid_status(false, StatusCode::UNAUTHORIZED).await;
         f.pure_key_account(true);
         if let Some(mode) = mode {
-            assert_eq!(f.put(json!({"paid_fallback_mode":mode})).await, StatusCode::OK);
+            assert_eq!(
+                f.put(json!({"paid_fallback_mode":mode})).await,
+                StatusCode::OK
+            );
         }
-        assert_eq!(f.message(None).await, StatusCode::SERVICE_UNAVAILABLE, "{mode:?}");
+        assert_eq!(
+            f.message(None).await,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{mode:?}"
+        );
         assert_eq!(f.free.load(Ordering::SeqCst), 0, "{mode:?}");
         assert_eq!(f.paid.load(Ordering::SeqCst), 1, "{mode:?}");
     }

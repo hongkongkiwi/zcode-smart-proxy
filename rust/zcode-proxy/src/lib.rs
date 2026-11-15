@@ -4,10 +4,11 @@
 pub mod admin;
 pub mod auth;
 pub mod engine;
+pub mod openai_routes;
 pub mod state;
 pub mod store;
-pub mod vault;
 mod streaming;
+pub mod vault;
 
 use std::sync::Arc;
 
@@ -23,6 +24,9 @@ use state::AppState;
 fn data_plane(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/messages", post(engine::handle_messages))
+        .route("/v1/chat/completions", post(openai_routes::handle_chat))
+        .route("/v1/completions", post(openai_routes::handle_completions))
+        .route("/v1/responses", post(openai_routes::handle_responses))
         .route(
             "/v1/messages/count_tokens",
             post(engine::handle_count_tokens),

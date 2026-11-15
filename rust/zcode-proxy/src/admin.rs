@@ -237,8 +237,14 @@ pub async fn handle_put_settings(
         let valid = matches!(
             (key.as_str(), value.as_str()),
             ("gateway_paused" | "sticky_sessions", Some("0" | "1"))
-                | ("paid_fallback_mode", Some("free_first" | "balanced" | "never"))
-                | ("selection_strategy", Some("random" | "round_robin" | "best_quota" | "priority"))
+                | (
+                    "paid_fallback_mode",
+                    Some("free_first" | "balanced" | "never")
+                )
+                | (
+                    "selection_strategy",
+                    Some("random" | "round_robin" | "best_quota" | "priority")
+                )
         );
         if !valid {
             return (StatusCode::BAD_REQUEST, "invalid setting value").into_response();
