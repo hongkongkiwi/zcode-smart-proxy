@@ -1,0 +1,526 @@
+//! The forward engine: the free-first fallback ladder over the classified
+//! ladder from zcode-core. Phase 4 skeleton: captcha solving rides the
+//! NoopSolver seam (captcha-required free attempts degrade to paid fallback,
+//! matching the Go path with a broken browser) and TLS is direct (the
+//! fingerprint dialer seam is not wired to rquest yet).
+
+use axum::response::{IntoResponse, Response};
+use reqwest::StatusCode;
+use serde_json::{json, Value};
+use zcode_core::{
+    aggregate_anthropic_stream, classify_failure, classify_ok_body, FailureClass, OkBodyClass,
+    Shape,
+};
+
+use crate::state::{AppState, Creds, UsageRecord};
+
+pub const CHANNEL_FREE: &str = "free";
+pub const CHANNEL_PAID: &str = "paid";
+pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+const MAX_ACCOUNT_ATTEMPTS: usize = 3;
+
+/// Per-attempt outcome (Go relayOutcome subset).
+enum Attempt {
+    /// Response is fully written (success or terminal error).
+    Written(Response),
+    /// Try the next candidate; the account cools for `cool_secs` (0 = none).
+    /// `soft` marks content-quality failures (challenge/captcha/risk) that
+    /// balanced mode cascades to the same account's paid channel.
+    NextAccount { cool_secs: u64, soft: bool },
+}
+
+fn endpoint_for(state: &AppState, channel: &str) -> String {
+    if channel == CHANNEL_FREE {
+        state.upstream.zai.clone()
+    } else {
+        state.upstream.zai_fallback.clone()
+    }
+}
+
+fn auth_headers(creds: &Creds, channel: &str) -> Vec<(String, String)> {
+    let mut h = vec![
+        ("content-type".to_string(), "application/json".to_string()),
+        ("accept".to_string(), "application/json".to_string()),
+        (
+            "anthropic-version".to_string(),
+            ANTHROPIC_VERSION.to_string(),
+        ),
+    ];
+    if channel == CHANNEL_FREE {
+        h.push((
+            "Authorization".to_string(),
+            format!("Bearer {}", creds.zcode_jwt),
+        ));
+    } else {
+        h.push(("x-api-key".to_string(), creds.api_key.clone()));
+    }
+    h
+}
+
+fn error_response(status: StatusCode, err_type: &str, msg: &str) -> Response {
+    (
+        status,
+        axum::Json(json!({
+            "type": "error",
+            "error": {"type": err_type, "message": msg}
+        })),
+    )
+        .into_response()
+}
+
+fn headers_vec_to_map(h: Vec<(String, String)>) -> reqwest::header::HeaderMap {
+    let mut m = reqwest::header::HeaderMap::new();
+    for (k, v) in h {
+        if let (Ok(k), Ok(v)) = (
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+            reqwest::header::HeaderValue::from_str(&v),
+        ) {
+            m.insert(k, v);
+        }
+    }
+    m
+}
+
+/// Classify a >=400 response via the core ladder and map to outcomes.
+fn classify_to_attempt(
+    status: StatusCode,
+    cf: Option<String>,
+    ct: Option<String>,
+    body: String,
+    shape: Shape,
+) -> Attempt {
+    let status_num = status.as_u16();
+    let cf_ref = cf.as_deref();
+    let ct_ref = ct.as_deref();
+    match classify_failure(shape, status_num, cf_ref, ct_ref, &body) {
+        FailureClass::Redirect => Attempt::NextAccount {
+            cool_secs: 120,
+            soft: false,
+        },
+        FailureClass::Challenge | FailureClass::HtmlBlock => Attempt::NextAccount {
+            cool_secs: 300,
+            soft: true,
+        },
+        FailureClass::CaptchaRejected => Attempt::NextAccount {
+            cool_secs: 60,
+            soft: true,
+        },
+        FailureClass::RiskBlocked => Attempt::NextAccount {
+            cool_secs: 120,
+            soft: false,
+        },
+        FailureClass::ProtocolPassthrough => {
+            let resp = (status, body).into_response();
+            Attempt::Written(resp)
+        }
+        FailureClass::CredentialFailure => Attempt::NextAccount {
+            cool_secs: 0,
+            soft: false,
+        },
+        FailureClass::RateLimited => Attempt::NextAccount {
+            cool_secs: 30,
+            soft: false,
+        },
+        FailureClass::Exhausted => Attempt::NextAccount {
+            cool_secs: 0,
+            soft: false,
+        },
+        FailureClass::UpstreamError => {
+            let msg = truncate(&body, 300);
+            Attempt::Written(error_response(
+                status,
+                "api_error",
+                &format!("upstream error HTTP {status_num}: {msg}"),
+            ))
+        }
+    }
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// POST /v1/messages/count_tokens — the ported estimator.
+pub async fn handle_count_tokens(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    body: String,
+) -> Response {
+    let _ = state;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let est = zcode_core::EST_BASE_TOKENS
+        + zcode_core::estimate_messages_tokens(v.get("messages"))
+        + zcode_core::estimate_content_tokens(v.get("system"))
+        + v.get("tools")
+            .and_then(serde_json::Value::as_str)
+            .map(zcode_core::estimate_text_tokens)
+            .unwrap_or_else(|| {
+                v.get("tools")
+                    .map(|t| zcode_core::estimate_text_tokens(&t.to_string()))
+                    .unwrap_or(0)
+            });
+    (
+        axum::http::StatusCode::OK,
+        Json(json!({"input_tokens": est})),
+    )
+        .into_response()
+}
+
+/// GET /v1/models — the default catalog (settings override is a service-layer
+/// feature; the skeleton ships the fixed list).
+pub async fn handle_models() -> Response {
+    let now = now_secs();
+    let models = [
+        "GLM-5.3",
+        "GLM-5.3-Flash",
+        "GLM-5.2",
+        "GLM-5.1",
+        "GLM-5",
+        "GLM-5-Turbo",
+        "GLM-5V-Turbo",
+        "GLM-5.1-Highspeed",
+    ];
+    let data: Vec<serde_json::Value> = models
+        .iter()
+        .map(|m| {
+            json!({
+                "id": m, "object": "model", "type": "model",
+                "display_name": m, "created": now, "owned_by": "zcode-proxy-rs"
+            })
+        })
+        .collect();
+    (
+        axum::http::StatusCode::OK,
+        Json(json!({"object": "list", "data": data})),
+    )
+        .into_response()
+}
+
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// One upstream attempt: HTTP call + classification. 2xx non-stream bodies
+/// go through the envelope path (L3 ordering); stream responses pass bytes
+/// through untouched.
+async fn attempt_upstream(
+    client: &reqwest::Client,
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: &[u8],
+    want_stream: bool,
+    shape: Shape,
+) -> Attempt {
+    let resp = match client
+        .post(url)
+        .headers(headers_vec_to_map(headers))
+        .body(payload.to_vec())
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return Attempt::NextAccount {
+                cool_secs: 60,
+                soft: true,
+            }
+        }
+    };
+    let status = resp.status();
+    if (300..400).contains(&status.as_u16()) {
+        return Attempt::NextAccount {
+            cool_secs: 120,
+            soft: false,
+        };
+    }
+    if status.as_u16() >= 400 {
+        // Headers before body: .text() consumes the response.
+        let cf = resp
+            .headers()
+            .get("cf-mitigated")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let body = resp.text().await.unwrap_or_default();
+        return classify_to_attempt(status, cf, ct, body, shape);
+    }
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if ct.contains("text/event-stream") && want_stream {
+        // Stream passthrough (usage sniffing lands with the record call).
+        let bytes = resp.bytes().await.unwrap_or_default();
+        return Attempt::Written(
+            (
+                axum::http::StatusCode::OK,
+                [("content-type", "text/event-stream")],
+                bytes,
+            )
+                .into_response(),
+        );
+    }
+    if ct.contains("text/event-stream") {
+        // Non-stream client: aggregate the upstream SSE (64MB cap).
+        let bytes = resp.bytes().await.unwrap_or_default();
+        let mut cursor = std::io::Cursor::new(bytes.to_vec());
+        return match aggregate_anthropic_stream(&mut cursor) {
+            Ok((raw, _usage)) => Attempt::Written(
+                (
+                    axum::http::StatusCode::OK,
+                    [("content-type", "application/json")],
+                    raw,
+                )
+                    .into_response(),
+            ),
+            Err(e) => Attempt::Written(error_response(
+                StatusCode::BAD_GATEWAY,
+                "api_error",
+                &format!("upstream stream failed: {e}"),
+            )),
+        };
+    }
+    // 2xx JSON: envelope path (L3 ordering).
+    let body = resp.text().await.unwrap_or_default();
+    match classify_ok_body(&body) {
+        OkBodyClass::Success => {
+            Attempt::Written((status, [("content-type", "application/json")], body).into_response())
+        }
+        OkBodyClass::EmptyMessage => Attempt::NextAccount {
+            cool_secs: 60,
+            soft: true,
+        },
+        OkBodyClass::ExhaustedEnvelope => Attempt::NextAccount {
+            cool_secs: 0,
+            soft: false,
+        },
+        OkBodyClass::ErrorEnvelope => {
+            Attempt::Written((status, [("content-type", "application/json")], body).into_response())
+        }
+    }
+}
+
+use axum::Json;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// POST /v1/messages (+ shape aliases): the free-first fallback ladder.
+pub async fn handle_messages(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    extension: axum::Extension<crate::auth::ResolvedKey>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response {
+    let named = extension.named.clone();
+    let parsed: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "body is not valid JSON",
+            )
+        }
+    };
+    let mut obj = match parsed {
+        Value::Object(o) => o,
+        _ => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "body must be an object",
+            )
+        }
+    };
+    // Model normalization (core): strip provider/ prefix, alias table,
+    // config-catalog case-insensitive fallback.
+    let config_models: Vec<&str> = vec![];
+    if let Some(m) = obj.get("model").and_then(Value::as_str) {
+        let normalized = zcode_core::normalize_model_name(m, &config_models);
+        obj.insert("model".into(), Value::String(normalized));
+    }
+    // Named-key per-request gates: quota + model whitelist.
+    if let Some(k) = &named {
+        if k.quota_total > 0 && k.quota_used >= k.quota_total {
+            return error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                &format!(
+                    "gateway key token quota exhausted ({}/{}): {}",
+                    k.quota_used, k.quota_total, k.name
+                ),
+            );
+        }
+        let model = obj
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        if !zcode_core::model_allowed(&k.models, &model) {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                "api_error",
+                &format!("model not allowed for this gateway key: {model}"),
+            );
+        }
+    }
+    let want_stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let shape = if headers
+        .get("x-zcode-rs-shape")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .contains("highspeed")
+    {
+        Shape::Highspeed
+    } else if headers
+        .get("x-zcode-rs-shape")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .contains("off-peak")
+    {
+        Shape::OffPeak
+    } else {
+        Shape::Plain
+    };
+    let session_key = zcode_core::session_key(
+        obj.get("metadata")
+            .and_then(|m| m.get("user_id"))
+            .and_then(Value::as_str),
+        None,
+    );
+    let payload = serde_json::to_vec(&Value::Object(obj)).unwrap_or_default();
+
+    let client = reqwest::Client::new();
+    let mode = state
+        .setting("paid_fallback_mode")
+        .unwrap_or_else(|| "free_first".into());
+    let accounts = state.accounts.lock().unwrap().clone();
+    let creds_map = state.creds.lock().unwrap().clone();
+
+    // Phases: free -> paid -> paid_only. never-mode still serves pure-APIKey
+    // accounts through paid_only (Go ChannelPaidOnly semantics).
+    let mut phases: Vec<&str> = vec![CHANNEL_FREE, CHANNEL_PAID, "paid_only"];
+    if mode == "never" {
+        phases = vec![CHANNEL_FREE, "paid_only"];
+    }
+
+    for phase in phases {
+        // Fresh skip per phase (Go tried vs triedPaid): an account tried on
+        // free MUST be re-selectable on paid — that is the whole fallback.
+        let mut skip: HashMap<i64, bool> = HashMap::new();
+        for _ in 0..MAX_ACCOUNT_ATTEMPTS {
+            let now = now_secs();
+            let q = zcode_core::SelectionQuery {
+                provider: "zai",
+                group: "",
+                skip: &skip,
+                channel: phase,
+                now_unix: now,
+            };
+            let sel =
+                state
+                    .selector
+                    .lock()
+                    .unwrap()
+                    .select_sticky_channel(&accounts, &q, &session_key);
+            let Some(a) = sel.account else { break };
+            let acct = a.clone();
+            skip.insert(acct.id, true);
+            let Some(creds) = creds_map.get(&acct.id) else {
+                continue;
+            };
+
+            let (url, _) = (endpoint_for(&state, phase), ());
+            let out = attempt_upstream(
+                &client,
+                &url,
+                auth_headers(creds, phase),
+                &payload,
+                want_stream,
+                shape,
+            )
+            .await;
+            match out {
+                Attempt::Written(resp) => {
+                    let st = resp.status().as_u16();
+                    crate::admin::record_usage_db(
+                        &state,
+                        UsageRecord {
+                            account_id: acct.id,
+                            status: st,
+                            gateway_key_id: named.as_ref().map(|k| k.id).unwrap_or(0),
+                            quota_charge: 0,
+                        },
+                    );
+                    if let Some(k) = &named {
+                        if st < 400 {
+                            state.named_keys.lock().unwrap().iter_mut().for_each(|kk| {
+                                if kk.id == k.id {
+                                    kk.quota_used += 1;
+                                }
+                            });
+                        }
+                    }
+                    return resp;
+                }
+                Attempt::NextAccount { cool_secs, soft } => {
+                    if cool_secs > 0 {
+                        state.accounts.lock().unwrap().iter_mut().for_each(|aa| {
+                            if aa.id == acct.id {
+                                aa.status = zcode_core::STATUS_COOLING.into();
+                                aa.cooling_until = now_secs() + cool_secs as i64;
+                            }
+                        });
+                    }
+                    // Balanced mode: soft free-phase failures cascade to the
+                    // same account's paid channel immediately.
+                    if soft && mode == "balanced" && phase == CHANNEL_FREE {
+                        if let Some(creds) = creds_map.get(&acct.id) {
+                            if !creds.api_key.is_empty() {
+                                let url = endpoint_for(&state, CHANNEL_PAID);
+                                let out = attempt_upstream(
+                                    &client,
+                                    &url,
+                                    auth_headers(creds, CHANNEL_PAID),
+                                    &payload,
+                                    want_stream,
+                                    shape,
+                                )
+                                .await;
+                                if let Attempt::Written(resp) = out {
+                                    let st = resp.status().as_u16();
+                                    crate::admin::record_usage_db(
+                                        &state,
+                                        UsageRecord {
+                                            account_id: acct.id,
+                                            status: st,
+                                            gateway_key_id: named
+                                                .as_ref()
+                                                .map(|k| k.id)
+                                                .unwrap_or(0),
+                                            quota_charge: 0,
+                                        },
+                                    );
+                                    return resp;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no_available_account",
+        "所有账号本次尝试均失败，请稍后重试",
+    )
+}

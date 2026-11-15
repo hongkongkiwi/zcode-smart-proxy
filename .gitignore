@@ -28,7 +28,7 @@ Thumbs.db
 # 本机运行时（启动脚本/密钥/二进制，不入库）
 run.sh
 .secrets.env
-zcode-proxy
+/zcode-proxy
 connect-zcode.sh
 .agents/
 
