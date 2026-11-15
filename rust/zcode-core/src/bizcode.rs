@@ -148,22 +148,118 @@ mod tests {
             want: bool,
         }
         let cases = vec![
-            C { name: "offpeak queued code", shape: "offpeak", status: 429, text: r#"{"code":3105,"msg":"queued"}"#, want: true },
-            C { name: "offpeak bare 429 = queue signal", shape: "offpeak", status: 429, text: r#"{"error":{"message":"busy"}}"#, want: true },
-            C { name: "offpeak ticket expired", shape: "offpeak", status: 400, text: r#"{"code":3102,"msg":"ticket unavailable"}"#, want: true },
-            C { name: "offpeak ticket wrong state (3.17.1)", shape: "offpeak", status: 400, text: r#"{"code":3104,"msg":"invalid off-peak ticket"}"#, want: true },
-            C { name: "offpeak window expired (3.17.1)", shape: "offpeak", status: 400, text: r#"{"code":3106,"msg":"off-peak active window expired"}"#, want: true },
-            C { name: "offpeak legacy 3001 compat", shape: "offpeak", status: 400, text: r#"{"code": 3001}"#, want: true },
-            C { name: "offpeak eligibility", shape: "offpeak", status: 400, text: r#"{"code":3101}"#, want: true },
-            C { name: "offpeak idle quota", shape: "offpeak", status: 400, text: r#"{"code":3103}"#, want: true },
-            C { name: "offpeak long code boundary", shape: "offpeak", status: 400, text: r#"{"code":31021}"#, want: false },
-            C { name: "offpeak unrelated 400", shape: "offpeak", status: 400, text: r#"{"error":{"message":"bad request"}}"#, want: false },
-            C { name: "highspeed card expired quoted", shape: "highspeed", status: 400, text: r#"{"error":{"provider_code":"3402"}}"#, want: true },
-            C { name: "highspeed card expired numeric", shape: "highspeed", status: 400, text: r#"{"provider_code": 3402}"#, want: true },
-            C { name: "highspeed providerErrorCode spelling", shape: "highspeed", status: 400, text: r#"{"providerErrorCode":"3402"}"#, want: true },
-            C { name: "highspeed long code boundary", shape: "highspeed", status: 400, text: r#"{"provider_code":"34021"}"#, want: false },
-            C { name: "highspeed generic biz code not matched", shape: "highspeed", status: 400, text: r#"{"code":3402}"#, want: false },
-            C { name: "plain shape never special", shape: "", status: 429, text: r#"{"code":3105}"#, want: false },
+            C {
+                name: "offpeak queued code",
+                shape: "offpeak",
+                status: 429,
+                text: r#"{"code":3105,"msg":"queued"}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak bare 429 = queue signal",
+                shape: "offpeak",
+                status: 429,
+                text: r#"{"error":{"message":"busy"}}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak ticket expired",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"code":3102,"msg":"ticket unavailable"}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak ticket wrong state (3.17.1)",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"code":3104,"msg":"invalid off-peak ticket"}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak window expired (3.17.1)",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"code":3106,"msg":"off-peak active window expired"}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak legacy 3001 compat",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"code": 3001}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak eligibility",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"code":3101}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak idle quota",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"code":3103}"#,
+                want: true,
+            },
+            C {
+                name: "offpeak long code boundary",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"code":31021}"#,
+                want: false,
+            },
+            C {
+                name: "offpeak unrelated 400",
+                shape: "offpeak",
+                status: 400,
+                text: r#"{"error":{"message":"bad request"}}"#,
+                want: false,
+            },
+            C {
+                name: "highspeed card expired quoted",
+                shape: "highspeed",
+                status: 400,
+                text: r#"{"error":{"provider_code":"3402"}}"#,
+                want: true,
+            },
+            C {
+                name: "highspeed card expired numeric",
+                shape: "highspeed",
+                status: 400,
+                text: r#"{"provider_code": 3402}"#,
+                want: true,
+            },
+            C {
+                name: "highspeed providerErrorCode spelling",
+                shape: "highspeed",
+                status: 400,
+                text: r#"{"providerErrorCode":"3402"}"#,
+                want: true,
+            },
+            C {
+                name: "highspeed long code boundary",
+                shape: "highspeed",
+                status: 400,
+                text: r#"{"provider_code":"34021"}"#,
+                want: false,
+            },
+            C {
+                name: "highspeed generic biz code not matched",
+                shape: "highspeed",
+                status: 400,
+                text: r#"{"code":3402}"#,
+                want: false,
+            },
+            C {
+                name: "plain shape never special",
+                shape: "",
+                status: 429,
+                text: r#"{"code":3105}"#,
+                want: false,
+            },
         ];
         for c in cases {
             let got = match c.shape {
@@ -176,7 +272,11 @@ mod tests {
                 "highspeed" => has_provider_code(&c.text.to_lowercase(), "3402"),
                 _ => false,
             };
-            assert_eq!(got, c.want, "{}: shape={} status={} text={}", c.name, c.shape, c.status, c.text);
+            assert_eq!(
+                got, c.want,
+                "{}: shape={} status={} text={}",
+                c.name, c.shape, c.status, c.text
+            );
         }
     }
 
@@ -194,13 +294,20 @@ mod tests {
             (r#"{}"#, false),
         ];
         for (text, want) in cases {
-            assert_eq!(has_provider_code(&text.to_lowercase(), "3402"), want, "{text}");
+            assert_eq!(
+                has_provider_code(&text.to_lowercase(), "3402"),
+                want,
+                "{text}"
+            );
         }
     }
 
     #[test]
     fn exhaustion_family() {
-        assert!(is_exhausted_error(200, r#"{"code":1005,"msg":"exceed quota limit"}"#));
+        assert!(is_exhausted_error(
+            200,
+            r#"{"code":1005,"msg":"exceed quota limit"}"#
+        ));
         assert!(is_exhausted_error(402, "anything"));
         assert!(is_exhausted_error(200, "Insufficient Balance"));
         assert!(is_exhausted_error(200, "QUOTA EXCEEDED"));

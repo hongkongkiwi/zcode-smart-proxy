@@ -89,7 +89,10 @@ mod tests {
 
     #[test]
     fn unknown_passthrough() {
-        assert_eq!(normalize_model_name("  mystery-model  ", &[]), "mystery-model");
+        assert_eq!(
+            normalize_model_name("  mystery-model  ", &[]),
+            "mystery-model"
+        );
     }
 
     #[test]

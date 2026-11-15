@@ -112,7 +112,11 @@ pub fn estimate_image_block_tokens(b: &Value) -> Option<i64> {
         return None;
     }
     // Header-only decode: PNG needs 24 bytes; JPEG SOF lives within ~64KB.
-    let enc = if data.len() > 90_000 { &data[..90_000] } else { data };
+    let enc = if data.len() > 90_000 {
+        &data[..90_000]
+    } else {
+        data
+    };
     let head = decode_base64_lenient(enc)?;
     let (w, h) = image_pixel_dimensions(&head);
     if w <= 0 || h <= 0 {
@@ -182,8 +186,7 @@ pub fn image_pixel_dimensions(d: &[u8]) -> (i64, i64) {
             if i + 4 > d.len() {
                 break;
             }
-            let seg_len =
-                usize::from(d[i + 2]) << 8 | usize::from(d[i + 3]);
+            let seg_len = usize::from(d[i + 2]) << 8 | usize::from(d[i + 3]);
             if (0xC0..=0xCF).contains(&m) && m != 0xC4 && m != 0xC8 && m != 0xCC {
                 let be16 = |b: &[u8]| i64::from(u16::from_be_bytes([b[0], b[1]]));
                 return (be16(&d[i + 7..i + 9]), be16(&d[i + 5..i + 7]));
@@ -234,7 +237,11 @@ mod tests {
                 json!([{"type": "text", "text": "Hello world, this is a test!"}]),
                 7,
             ),
-            ("thinking block", json!([{"type": "thinking", "thinking": "你好世界"}]), 4),
+            (
+                "thinking block",
+                json!([{"type": "thinking", "thinking": "你好世界"}]),
+                4,
+            ),
             (
                 "image block fallback",
                 json!([{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}]),
@@ -250,7 +257,11 @@ mod tests {
                 json!([{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "output here"}]}]),
                 2,
             ),
-            ("unknown block falls back", json!([{"type": "weird_thing", "foo": "bar"}]), 4),
+            (
+                "unknown block falls back",
+                json!([{"type": "weird_thing", "foo": "bar"}]),
+                4,
+            ),
         ];
         for (name, v, want) in cases {
             assert_eq!(estimate_content_tokens(Some(&v)), want, "{name}");

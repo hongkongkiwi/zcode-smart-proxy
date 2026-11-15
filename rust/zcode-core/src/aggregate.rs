@@ -140,7 +140,9 @@ pub fn aggregate_anthropic_stream(
                     }
                     "thinking" => {
                         nb.insert("thinking".to_string(), Value::String(String::new()));
-                        if let Some(sig) = blk.and_then(|b| b.get("signature")).and_then(Value::as_str) {
+                        if let Some(sig) =
+                            blk.and_then(|b| b.get("signature")).and_then(Value::as_str)
+                        {
                             if !sig.is_empty() {
                                 nb.insert("signature".to_string(), Value::String(sig.to_string()));
                             }
@@ -198,17 +200,18 @@ pub fn aggregate_anthropic_stream(
                                     .and_then(Value::as_str)
                                     .unwrap_or("")
                                     .to_string();
-                                b.insert(
-                                    "signature".to_string(),
-                                    Value::String(prev + s),
-                                );
+                                b.insert("signature".to_string(), Value::String(prev + s));
                             }
                         }
                     }
                     Some("text_delta") => {
                         if let Some(s) = delta.get("text").and_then(Value::as_str) {
                             let b = agg.blocks[idx].as_mut().unwrap();
-                            let prev = b.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+                            let prev = b
+                                .get("text")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
                             b.insert("text".to_string(), Value::String(prev + s));
                         }
                     }

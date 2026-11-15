@@ -209,7 +209,10 @@ mod tests {
     #[test]
     fn data_only_error_frame_normalized() {
         let mut p = SseParser::new();
-        let evs = collect(&mut p, vec![b"data: {\"error\":{\"message\":\"boom\"}}\n\n"]);
+        let evs = collect(
+            &mut p,
+            vec![b"data: {\"error\":{\"message\":\"boom\"}}\n\n"],
+        );
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].event, "error");
     }
