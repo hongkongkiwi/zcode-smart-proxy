@@ -206,8 +206,12 @@ pub async fn handle_accounts(
 pub async fn handle_get_settings(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Response {
-    let all = state.settings.lock().unwrap().clone();
-    (StatusCode::OK, Json(all)).into_response()
+    let settings = state.settings.lock().unwrap();
+    let public: std::collections::HashMap<_, _> = settings
+        .iter()
+        .filter(|(key, _)| SETTINGS_WHITELIST.contains(&key.as_str()))
+        .collect();
+    (StatusCode::OK, Json(public)).into_response()
 }
 
 /// Settings whitelist (Go settingsWhitelist subset the port honors).
@@ -226,6 +230,20 @@ pub async fn handle_put_settings(
     let Some(map) = v.as_object() else {
         return (StatusCode::BAD_REQUEST, "invalid body").into_response();
     };
+    for (key, value) in map {
+        if !SETTINGS_WHITELIST.contains(&key.as_str()) {
+            continue;
+        }
+        let valid = matches!(
+            (key.as_str(), value.as_str()),
+            ("gateway_paused" | "sticky_sessions", Some("0" | "1"))
+                | ("paid_fallback_mode", Some("free_first" | "balanced" | "never"))
+                | ("selection_strategy", Some("random" | "round_robin" | "best_quota" | "priority"))
+        );
+        if !valid {
+            return (StatusCode::BAD_REQUEST, "invalid setting value").into_response();
+        }
+    }
     let mut updated = Vec::new();
     for (k, val) in map {
         if !SETTINGS_WHITELIST.contains(&k.as_str()) {

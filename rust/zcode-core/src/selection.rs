@@ -67,7 +67,7 @@ pub fn account_selectable(status: &str, cooling_until: i64, now_unix: i64) -> bo
 }
 
 pub fn selectable_for_free_phase(a: &AccountView, now_unix: i64) -> bool {
-    !a.zcode_jwt.is_empty() && account_selectable(&a.status, a.cooling_until, now_unix)
+    a.enabled && !a.zcode_jwt.is_empty() && account_selectable(&a.status, a.cooling_until, now_unix)
 }
 
 /// Paid-channel availability: enabled, not disabled, has API key, paid
@@ -87,6 +87,9 @@ pub fn paid_channel_available(a: &AccountView, now_unix: i64) -> bool {
 }
 
 pub fn channel_selectable(a: &AccountView, channel: &str, now_unix: i64) -> bool {
+    if !a.enabled {
+        return false;
+    }
     match channel {
         CHANNEL_FREE => selectable_for_free_phase(a, now_unix),
         CHANNEL_PAID => paid_channel_available(a, now_unix),
@@ -167,6 +170,10 @@ impl Selector {
             sticky: HashMap::new(),
             rotation: HashMap::new(),
         }
+    }
+
+    pub fn set_config(&mut self, config: StrategyConfig) {
+        self.config = config;
     }
 
     /// Filter by provider/group/skip/channel gates, then apply strategy.

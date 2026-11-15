@@ -347,6 +347,13 @@ pub async fn handle_messages(
     headers: axum::http::HeaderMap,
     body: String,
 ) -> Response {
+    if state.setting("gateway_paused").as_deref() == Some("1") {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "api_error",
+            "网关已全局暂停（panic stop），请在管理面板恢复",
+        );
+    }
     let named = extension.named.clone();
     let parsed: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
@@ -433,17 +440,20 @@ pub async fn handle_messages(
     let accounts = state.accounts.lock().unwrap().clone();
     let creds_map = state.creds.lock().unwrap().clone();
 
-    // Phases: free -> paid -> paid_only. never-mode still serves pure-APIKey
-    // accounts through paid_only (Go ChannelPaidOnly semantics).
-    let mut phases: Vec<&str> = vec![CHANNEL_FREE, CHANNEL_PAID, "paid_only"];
-    if mode == "never" {
-        phases = vec![CHANNEL_FREE, "paid_only"];
-    }
+    // Never mode still serves pure-APIKey accounts through paid_only.
+    let phases = if mode == "free_first" || mode == "balanced" {
+        vec![CHANNEL_FREE, CHANNEL_PAID]
+    } else {
+        vec![CHANNEL_FREE, "paid_only"]
+    };
 
+    let mut free_tried = HashMap::new();
     for phase in phases {
-        // Fresh skip per phase (Go tried vs triedPaid): an account tried on
-        // free MUST be re-selectable on paid — that is the whole fallback.
-        let mut skip: HashMap<i64, bool> = HashMap::new();
+        let mut skip: HashMap<i64, bool> = if phase == CHANNEL_PAID && mode == "balanced" {
+            free_tried.clone()
+        } else {
+            HashMap::new()
+        };
         for _ in 0..MAX_ACCOUNT_ATTEMPTS {
             let now = now_secs();
             let q = zcode_core::SelectionQuery {
@@ -453,15 +463,24 @@ pub async fn handle_messages(
                 channel: phase,
                 now_unix: now,
             };
-            let sel =
-                state
-                    .selector
-                    .lock()
-                    .unwrap()
-                    .select_sticky_channel(&accounts, &q, &session_key);
+            let sel = {
+                let settings = state.settings.lock().unwrap();
+                let mut selector = state.selector.lock().unwrap();
+                selector.set_config(zcode_core::StrategyConfig {
+                    strategy: settings
+                        .get("selection_strategy")
+                        .cloned()
+                        .unwrap_or_else(|| "round_robin".into()),
+                    sticky_enabled: settings.get("sticky_sessions").is_none_or(|v| v != "0"),
+                });
+                selector.select_sticky_channel(&accounts, &q, &session_key)
+            };
             let Some(a) = sel.account else { break };
             let acct = a.clone();
             skip.insert(acct.id, true);
+            if phase == CHANNEL_FREE {
+                free_tried.insert(acct.id, true);
+            }
             let Some(creds) = creds_map.get(&acct.id) else {
                 continue;
             };
@@ -505,16 +524,27 @@ pub async fn handle_messages(
                     if cool_secs > 0 {
                         state.accounts.lock().unwrap().iter_mut().for_each(|aa| {
                             if aa.id == acct.id {
-                                aa.status = zcode_core::STATUS_COOLING.into();
-                                aa.cooling_until = now_secs() + cool_secs as i64;
+                                if phase == CHANNEL_FREE {
+                                    aa.status = zcode_core::STATUS_COOLING.into();
+                                    aa.cooling_until = now_secs() + cool_secs as i64;
+                                } else {
+                                    aa.paid_cooling_until = now_secs() + cool_secs as i64;
+                                }
                             }
                         });
                     }
                     // Balanced mode: soft free-phase failures cascade to the
                     // same account's paid channel immediately.
                     if soft && mode == "balanced" && phase == CHANNEL_FREE {
-                        if let Some(creds) = creds_map.get(&acct.id) {
-                            if !creds.api_key.is_empty() {
+                        let paid_available = state
+                            .accounts
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .find(|a| a.id == acct.id)
+                            .is_some_and(|a| zcode_core::paid_channel_available(a, now_secs()));
+                        if paid_available {
+                            if let Some(creds) = creds_map.get(&acct.id) {
                                 let url = endpoint_for(&state, CHANNEL_PAID);
                                 let out = attempt_upstream(
                                     &client,
@@ -525,6 +555,16 @@ pub async fn handle_messages(
                                     shape,
                                 )
                                 .await;
+                                if let Attempt::NextAccount { cool_secs, .. } = &out {
+                                    if *cool_secs > 0 {
+                                        state.accounts.lock().unwrap().iter_mut().for_each(|aa| {
+                                            if aa.id == acct.id {
+                                                aa.paid_cooling_until =
+                                                    now_secs() + *cool_secs as i64;
+                                            }
+                                        });
+                                    }
+                                }
                                 if let Attempt::Written(resp, charge) = out {
                                     let st = resp.status().as_u16();
                                     crate::admin::record_usage_db(
