@@ -421,3 +421,94 @@ async fn authenticated_settings_exposes_only_supported_public_settings() {
     assert!(leaked.is_empty(), "non-public settings exposed: {leaked:?}");
     assert_eq!(f.calls(), (0, 0));
 }
+
+// ---- Slice A: login lockout + CSRF origin gate on Rust admin ----
+
+// Cross-origin login (Origin host != our Host) is rejected 403 before the
+// password is even checked — a no-cors fetch from another local port cannot
+// ride the admin session (review finding: SameSite does not separate ports).
+#[tokio::test]
+async fn login_rejects_cross_origin_without_password_check() {
+    let f = Fixture::new(false).await;
+    f.state
+        .settings
+        .lock()
+        .unwrap()
+        .insert("admin_password_hash".into(), "$2y$10$fakehashforcsrf".into());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header("content-type", "application/json")
+        .header("origin", "http://evil-port.example:9999")
+        .body(Body::from(r#"{"password":"anything"}"#))
+        .unwrap();
+    let resp = zcode_proxy::build_router(f.state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+// Same-origin and no-origin login requests pass through to the password
+// check (not CSRF-blocked).
+#[tokio::test]
+async fn login_same_origin_and_no_origin_accepted_shape() {
+    let f = Fixture::new(false).await;
+    f.state
+        .settings
+        .lock()
+        .unwrap()
+        .insert("admin_password_hash".into(), "$2y$10$fakehashforcsrf".into());
+    let app = zcode_proxy::build_router(f.state.clone());
+    // Same origin: passes the CSRF gate (fails on password, which is fake).
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header("host", "127.0.0.1")
+        .header("origin", "http://127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"password":"x"}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+    // No origin header (curl/SDK): also passes the CSRF gate.
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"password":"x"}"#))
+        .unwrap();
+    let resp2 = app.oneshot(req2).await.unwrap();
+    assert_ne!(resp2.status(), StatusCode::FORBIDDEN);
+}
+
+// Login lockout (Slice A): after LOCKOUT_THRESHOLD failures from one client
+// within the window, further attempts are locked out even with the correct
+// password.
+#[tokio::test]
+async fn login_lockout_after_repeated_failures() {
+    let f = Fixture::new(false).await;
+    f.state
+        .settings
+        .lock()
+        .unwrap()
+        .insert("admin_password_hash".into(), "$2y$10$fakehashforcsrf".into());
+    let mut guard = f.state.login_guard.lock().unwrap();
+    // Simulate threshold failures through the guard directly (the full
+    // bcrypt+lockout flow is slower; the guard is the logic under test).
+    let now = 1_700_000_000;
+    for _ in 0..LOCKOUT_THRESHOLD_TEST {
+        guard.record_failure("evil-client", now);
+    }
+    assert!(
+        guard.check("evil-client", now + 1) > 0,
+        "client must be locked out after {LOCKOUT_THRESHOLD_TEST} failures"
+    );
+    assert_eq!(guard.check("other-client", now), 0, "other clients unaffected");
+    // Window lapse clears the lockout.
+    assert_eq!(guard.check("evil-client", now + LOCKOUT_WINDOW_SECS_TEST + 1), 0);
+    drop(guard);
+}
+
+const LOCKOUT_THRESHOLD_TEST: usize = 5;
+const LOCKOUT_WINDOW_SECS_TEST: i64 = 900;

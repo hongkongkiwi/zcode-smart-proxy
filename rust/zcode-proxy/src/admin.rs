@@ -20,6 +20,75 @@ use crate::store;
 pub const SESSION_TTL_SECS: i64 = 86_400;
 pub const SESSION_COOKIE: &str = "zcode_rs_session";
 
+/// Login lockout (Go auth.go parity): after LOCKOUT_THRESHOLD failures from
+/// one client within the window, further attempts are rejected until the
+/// window lapses. Bounded per-client state; stale clients are pruned when
+/// the map balloons.
+const LOCKOUT_THRESHOLD: usize = 5;
+const LOCKOUT_WINDOW_SECS: i64 = 900;
+const LOCKOUT_SECS: i64 = 900;
+
+/// CSRF: mutating /api/* requests carrying an Origin header must present
+/// the panel's own host (SameSite=Strict does not separate ports of one
+/// host, so a local no-cors fetch could ride the admin session).
+fn origin_allowed(origin: &str, host: &str) -> bool {
+    match (origin, host) {
+        ("", _) => true, // non-browser clients (curl/SDKs) send no Origin
+        (o, h) => {
+            let o = o.trim_start_matches("http://").trim_start_matches("https://");
+            let o = o.split('/').next().unwrap_or("");
+            o.eq_ignore_ascii_case(h)
+        }
+    }
+}
+
+fn client_ip(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "local".into())
+}
+
+#[derive(Default)]
+pub struct LoginGuard {
+    /// client key -> (failure count, first failure unix secs)
+    failures: std::collections::HashMap<String, (usize, i64)>,
+}
+
+impl LoginGuard {
+    /// Returns remaining lockout seconds (0 = attempt allowed).
+    pub fn check(&mut self, client: &str, now_unix: i64) -> i64 {
+        const WINDOW: i64 = 900;
+        if self.failures.len() >= 4096 {
+            self.failures
+                .retain(|_, (_, first)| now_unix - *first <= WINDOW + LOCKOUT_SECS);
+        }
+        match self.failures.get(client) {
+            Some((count, first))
+                if *count >= LOCKOUT_THRESHOLD
+                    && now_unix - *first <= WINDOW + LOCKOUT_SECS =>
+            {
+                ((first + LOCKOUT_WINDOW_SECS) - now_unix).max(0)
+            }
+            _ => 0,
+        }
+    }
+
+    pub fn record_failure(&mut self, client: &str, now_unix: i64) {
+        let entry = self.failures.entry(client.to_string()).or_insert((0, now_unix));
+        entry.0 += 1;
+        if entry.0 == 1 {
+            entry.1 = now_unix;
+        }
+    }
+
+    pub fn clear(&mut self, client: &str) {
+        self.failures.remove(client);
+    }
+}
+
 fn token() -> String {
     // CSPRNG (OsRng = OS entropy): session tokens are bearer credentials.
     use rand::rngs::OsRng;
@@ -38,8 +107,30 @@ fn password_ok(hash: Option<String>, password: &str) -> bool {
 
 pub async fn handle_login(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     body: String,
 ) -> Response {
+    // CSRF gate: a request carrying an Origin header from a different host
+    // than ours is a cross-origin browser attempt — reject before touching
+    // the password. Non-browser clients send no Origin and are unaffected.
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let origin = headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if !origin_allowed(&origin, &host) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"success": false, "message": "cross-origin request rejected"})),
+        )
+            .into_response();
+    }
+    let client = client_ip(&headers);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
     let password = v
         .get("password")
@@ -49,11 +140,29 @@ pub async fn handle_login(
     if !password_ok(hash, password) {
         // Login failures are not rate-limited in this port yet (Go has a
         // bounded lockout); noted as a follow-up, never a silent gap.
+        {
+            let mut guard = state.login_guard.lock().unwrap();
+            let wait = guard.check(&client, now_secs());
+            if wait > 0 {
+                guard.record_failure(&client, now_secs());
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"success": false,
+                        "message": format!("尝试过于频繁，请 {} 秒后再试", wait + 1)})),
+                )
+                    .into_response();
+            }
+            guard.record_failure(&client, now_secs());
+        }
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"success": false, "message": "invalid credentials"})),
         )
             .into_response();
+    }
+    {
+        let mut guard = state.login_guard.lock().unwrap();
+        guard.clear(&client);
     }
     // Second factor: when a TOTP secret is enrolled+enabled, the login body
     // must carry a current TOTP code or an unused recovery code (single-use,

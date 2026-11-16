@@ -50,6 +50,8 @@ pub struct AppState {
     pub windows: Mutex<GwWindowTracker>,
     /// In-memory admin sessions (Go parity: restart revokes every session).
     pub sessions: Mutex<HashMap<String, i64>>,
+    /// Login lockout (bounded per-client failure tracking, admin.rs).
+    pub login_guard: Mutex<crate::admin::LoginGuard>,
     /// Rolling in-memory usage log (parity with recordUsage for E2E checks).
     pub usage: Mutex<Vec<UsageRecord>>,
 }
@@ -126,6 +128,7 @@ impl AppState {
             rpm: Mutex::new(GwRpmTracker::default()),
             windows: Mutex::new(GwWindowTracker::default()),
             sessions: Mutex::new(HashMap::new()),
+            login_guard: Mutex::new(crate::admin::LoginGuard::default()),
             usage: Mutex::new(Vec::new()),
         }
     }
@@ -143,6 +146,7 @@ impl AppState {
             rpm: Mutex::new(GwRpmTracker::default()),
             windows: Mutex::new(GwWindowTracker::default()),
             sessions: Mutex::new(HashMap::new()),
+            login_guard: Mutex::new(crate::admin::LoginGuard::default()),
             usage: Mutex::new(Vec::new()),
         }
     }
