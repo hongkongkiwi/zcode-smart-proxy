@@ -155,6 +155,13 @@ pub fn delete_account(conn: &Connection, id: i64) {
     let _ = conn.execute("DELETE FROM accounts WHERE id = ?1", [id]);
 }
 
+pub fn set_account_enabled(conn: &Connection, id: i64, enabled: bool) {
+    let _ = conn.execute(
+        "UPDATE accounts SET enabled = ?1 WHERE id = ?2",
+        rusqlite::params![enabled as i64, id],
+    );
+}
+
 // ---- gateway keys ----
 
 pub fn upsert_gateway_key(conn: &Connection, k: &crate::state::NamedKey) {

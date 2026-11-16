@@ -1,6 +1,7 @@
 //! Library surface: data plane + admin panel, exposed for integration tests
 //! (bin entrypoint in main.rs).
 
+pub mod account_routes;
 pub mod admin;
 pub mod auth;
 pub mod engine;
@@ -14,7 +15,7 @@ use std::sync::Arc;
 
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 
@@ -63,6 +64,22 @@ fn data_plane(state: Arc<AppState>) -> Router {
 fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
+        .route(
+            "/api/accounts/add",
+            post(crate::account_routes::handle_account_add),
+        )
+        .route(
+            "/api/accounts/{id}",
+            axum::routing::delete(crate::account_routes::handle_account_delete),
+        )
+        .route(
+            "/api/accounts/{id}/enabled",
+            put(crate::account_routes::handle_account_enabled),
+        )
+        .route(
+            "/api/auth/password",
+            post(crate::account_routes::handle_password_change),
+        )
         .route(
             "/api/settings",
             get(admin::handle_get_settings).put(admin::handle_put_settings),
