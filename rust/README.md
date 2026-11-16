@@ -15,19 +15,29 @@ production Go database.
   apply without restarting, and balanced fallback avoids repeated paid calls.
 - True incremental streaming with bounded SSE sniffing, empty-stream error
   frames, and disconnect-aware usage accounting.
-- Account management: add/delete/enable routes, password change, login lockout
-  (5 failures / 15-minute window), CSRF origin gate, TOTP 2FA with recovery
-  codes.
+- Account and authentication handlers exist, but their security and persistence
+  behavior is not yet verified for cutover. Account writes currently store
+  credentials without vault encryption. Router regressions now cover password
+  and second-factor lockout plus mutation Origin rejection. Lockout currently
+  uses the socket peer IP, not untrusted forwarded headers. Clients behind one
+  reverse proxy still share its bucket; explicit trusted-proxy handling remains
+  unfinished.
 - Vault: AES-256-GCM with Go's vault1 envelope, validated against 14
   Go-generated fixture cases.
+- Read-only Go account loading passes ten synthetic storage regressions,
+  including encrypted credentials, paid-fallback preservation, wrong-key
+  rejection, and unchanged source data. This is not a runtime migration.
 
-At the current tip, workspace tests report 128 passed and strict Clippy is
-clean. Those checks do not establish feature parity with the Go service.
+The current workspace test run passes 154 tests across 14 suites, and strict
+Clippy passes. Changed-file formatting passes. The workspace formatting check
+still fails on existing formatting in the frozen safety regression file, which
+was left unchanged. These checks do not establish Go feature parity.
 
 ## Remaining work
 
-1. Compatible encrypted storage and schema migration (the Rust store schema is
-   reduced and does not read the Go vault1 envelope).
+1. Compatible encrypted storage and schema migration. The Rust runtime store
+   still uses a reduced schema and is not wired to vault encryption. Read-only
+   Go account helpers are separate from runtime startup and do not migrate data.
 2. Account CRUD beyond add/delete/enable: update, import/export, OAuth,
    credential refresh, quota refresh.
 3. Admin lockout on named-key management, password step-up, enrollment expiry,

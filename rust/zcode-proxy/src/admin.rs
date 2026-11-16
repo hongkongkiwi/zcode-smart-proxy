@@ -26,29 +26,36 @@ pub const SESSION_COOKIE: &str = "zcode_rs_session";
 /// the map balloons.
 const LOCKOUT_THRESHOLD: usize = 5;
 const LOCKOUT_WINDOW_SECS: i64 = 900;
-const LOCKOUT_SECS: i64 = 900;
 
-/// CSRF: mutating /api/* requests carrying an Origin header must present
-/// the panel's own host (SameSite=Strict does not separate ports of one
-/// host, so a local no-cors fetch could ride the admin session).
-fn origin_allowed(origin: &str, host: &str) -> bool {
-    match (origin, host) {
-        ("", _) => true, // non-browser clients (curl/SDKs) send no Origin
-        (o, h) => {
-            let o = o.trim_start_matches("http://").trim_start_matches("https://");
-            let o = o.split('/').next().unwrap_or("");
-            o.eq_ignore_ascii_case(h)
-        }
+/// Require a serialized HTTP(S) origin whose authority matches Host, including port.
+fn origin_allowed(headers: &axum::http::HeaderMap) -> bool {
+    let mut origins = headers.get_all("origin").iter();
+    let Some(origin) = origins.next() else {
+        return true;
+    };
+    if origins.next().is_some() {
+        return false;
     }
-}
-
-fn client_ip(headers: &axum::http::HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "local".into())
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    if !matches!(scheme, "http" | "https")
+        || authority.is_empty()
+        || authority.contains(['/', '?', '#', '@', '\\'])
+        || reqwest::Url::parse(origin).is_err()
+    {
+        return false;
+    }
+    let mut hosts = headers.get_all("host").iter();
+    let Some(host) = hosts.next().and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    hosts.next().is_none()
+        && host.parse::<axum::http::uri::Authority>().is_ok()
+        && authority.eq_ignore_ascii_case(host)
 }
 
 #[derive(Default)]
@@ -60,28 +67,30 @@ pub struct LoginGuard {
 impl LoginGuard {
     /// Returns remaining lockout seconds (0 = attempt allowed).
     pub fn check(&mut self, client: &str, now_unix: i64) -> i64 {
-        const WINDOW: i64 = 900;
-        if self.failures.len() >= 4096 {
-            self.failures
-                .retain(|_, (_, first)| now_unix - *first <= WINDOW + LOCKOUT_SECS);
-        }
+        self.failures
+            .retain(|_, (_, first)| now_unix - *first < LOCKOUT_WINDOW_SECS);
         match self.failures.get(client) {
-            Some((count, first))
-                if *count >= LOCKOUT_THRESHOLD
-                    && now_unix - *first <= WINDOW + LOCKOUT_SECS =>
-            {
-                ((first + LOCKOUT_WINDOW_SECS) - now_unix).max(0)
+            Some((count, first)) if *count >= LOCKOUT_THRESHOLD => {
+                (first + LOCKOUT_WINDOW_SECS - now_unix).max(0)
             }
             _ => 0,
         }
     }
 
     pub fn record_failure(&mut self, client: &str, now_unix: i64) {
-        let entry = self.failures.entry(client.to_string()).or_insert((0, now_unix));
-        entry.0 += 1;
-        if entry.0 == 1 {
-            entry.1 = now_unix;
+        self.failures
+            .retain(|_, (_, first)| now_unix - *first < LOCKOUT_WINDOW_SECS);
+        if self.failures.len() >= 4096 && !self.failures.contains_key(client) {
+            if let Some(oldest) = self.failures.iter().min_by_key(|(_, (_, first))| *first) {
+                let key = oldest.0.clone();
+                self.failures.remove(&key);
+            }
         }
+        let entry = self
+            .failures
+            .entry(client.to_string())
+            .or_insert((0, now_unix));
+        entry.0 += 1;
     }
 
     pub fn clear(&mut self, client: &str) {
@@ -108,29 +117,29 @@ fn password_ok(hash: Option<String>, password: &str) -> bool {
 pub async fn handle_login(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     body: String,
 ) -> Response {
-    // CSRF gate: a request carrying an Origin header from a different host
-    // than ours is a cross-origin browser attempt — reject before touching
-    // the password. Non-browser clients send no Origin and are unaffected.
-    let host = headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let origin = headers
-        .get("origin")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    if !origin_allowed(&origin, &host) {
+    if !origin_allowed(&headers) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"success": false, "message": "cross-origin request rejected"})),
         )
             .into_response();
     }
-    let client = client_ip(&headers);
+    // Proxied clients share the proxy's bucket; forwarded headers are untrusted.
+    let client = peer
+        .map(|axum::Extension(axum::extract::ConnectInfo(addr))| addr.ip().to_string())
+        .unwrap_or_else(|| "local".into());
+    let wait = state.login_guard.lock().unwrap().check(&client, now_secs());
+    if wait > 0 {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"success": false,
+                "message": format!("尝试过于频繁，请 {} 秒后再试", wait + 1)})),
+        )
+            .into_response();
+    }
     let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
     let password = v
         .get("password")
@@ -138,31 +147,16 @@ pub async fn handle_login(
         .unwrap_or("");
     let hash = state.setting("admin_password_hash");
     if !password_ok(hash, password) {
-        // Login failures are not rate-limited in this port yet (Go has a
-        // bounded lockout); noted as a follow-up, never a silent gap.
-        {
-            let mut guard = state.login_guard.lock().unwrap();
-            let wait = guard.check(&client, now_secs());
-            if wait > 0 {
-                guard.record_failure(&client, now_secs());
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"success": false,
-                        "message": format!("尝试过于频繁，请 {} 秒后再试", wait + 1)})),
-                )
-                    .into_response();
-            }
-            guard.record_failure(&client, now_secs());
-        }
+        state
+            .login_guard
+            .lock()
+            .unwrap()
+            .record_failure(&client, now_secs());
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"success": false, "message": "invalid credentials"})),
         )
             .into_response();
-    }
-    {
-        let mut guard = state.login_guard.lock().unwrap();
-        guard.clear(&client);
     }
     // Second factor: when a TOTP secret is enrolled+enabled, the login body
     // must carry a current TOTP code or an unused recovery code (single-use,
@@ -198,6 +192,11 @@ pub async fn handle_login(
             }
         }
         if !second_ok {
+            state
+                .login_guard
+                .lock()
+                .unwrap()
+                .record_failure(&client, now_secs());
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({"success": false, "message": "second factor required"})),
@@ -205,6 +204,7 @@ pub async fn handle_login(
                 .into_response();
         }
     }
+    state.login_guard.lock().unwrap().clear(&client);
     let t = token();
     state
         .sessions
@@ -289,6 +289,17 @@ pub async fn require_session_mw(
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": {"message": "unauthorized", "type": "api_error"}})),
+        )
+            .into_response();
+    }
+    if !matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    ) && !origin_allowed(req.headers())
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"success": false, "message": "cross-origin request rejected"})),
         )
             .into_response();
     }

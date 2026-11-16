@@ -2,7 +2,7 @@
 
 use axum::{
     extract::Path,
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -19,8 +19,7 @@ fn err(status: StatusCode, msg: &str) -> Response {
         .into_response()
 }
 
-/// POST /api/accounts — import an account with credentials. The vault
-/// encrypts JWT/API key at rest (Go vault1 envelope, same crypto).
+/// Import an account into the reduced Rust store, which is not vault-backed yet.
 pub async fn handle_account_add(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     body: String,
@@ -86,11 +85,7 @@ pub async fn handle_account_add(
             api_key,
         },
     );
-    (
-        StatusCode::OK,
-        Json(json!({"ok": true, "id": id})),
-    )
-        .into_response()
+    (StatusCode::OK, Json(json!({"ok": true, "id": id}))).into_response()
 }
 
 /// DELETE /api/accounts/{id}
@@ -150,7 +145,10 @@ pub async fn handle_password_change(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     if new_pw.len() < 8 {
-        return err(StatusCode::BAD_REQUEST, "new password must be at least 8 characters");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "new password must be at least 8 characters",
+        );
     }
     let hash = state.setting("admin_password_hash");
     let current_ok = match &hash {
@@ -181,4 +179,3 @@ pub async fn handle_password_change(
 }
 
 use std::sync::Arc;
-use crate::state::AppState as _AppState_Reexport;

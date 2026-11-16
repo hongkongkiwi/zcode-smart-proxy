@@ -5,6 +5,7 @@ pub mod account_routes;
 pub mod admin;
 pub mod auth;
 pub mod engine;
+pub mod go_compat;
 pub mod openai_routes;
 pub mod state;
 pub mod store;
