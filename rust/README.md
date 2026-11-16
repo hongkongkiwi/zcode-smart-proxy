@@ -13,31 +13,32 @@ production Go database.
   pause blocks generation, and settings reads exclude private values.
 - Supported control settings are validated before writes. Selection changes
   apply without restarting, and balanced fallback avoids repeated paid calls.
-- The experimental service has a separate SQLite schema, a basic admin API,
-  and TOTP enrollment. These do not yet provide Go storage or authentication
-  compatibility.
+- True incremental streaming with bounded SSE sniffing, empty-stream error
+  frames, and disconnect-aware usage accounting.
+- Account management: add/delete/enable routes, password change, login lockout
+  (5 failures / 15-minute window), CSRF origin gate, TOTP 2FA with recovery
+  codes.
+- Vault: AES-256-GCM with Go's vault1 envelope, validated against 14
+  Go-generated fixture cases.
 
-At commit `5c8a252`, workspace tests reported 95 passed and strict Clippy
-completed without warnings. Those checks do not establish feature parity.
+At the current tip, workspace tests report 128 passed and strict Clippy is
+clean. Those checks do not establish feature parity with the Go service.
 
 ## Remaining work
 
-1. Incremental streaming, bounded response handling, and durable token-based
-   gateway-key accounting for every response path.
-2. Authentication parity: login lockout, CSRF protection, password step-up,
-   enrollment expiry, atomic recovery-code consumption, passkeys, secure-cookie
-   policy, and safe panel rendering.
-3. Compatible encrypted storage, explicit schema migration, error propagation,
-   and recovery tested against synthetic Go database and vault fixtures.
-4. Account CRUD, import/export, OAuth, credential refresh, gateway-key management,
-   quota refresh, and the existing admin UI contracts.
-5. OpenAI chat/completions/responses protocols, async ticket and highspeed-card
-   workflows, model retrieval, and the full upstream-header policy.
-6. Actual billing claim/reset execution and scheduled automation. Request
-   constructors and pure decision helpers are not running cron jobs.
-7. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits
+1. Compatible encrypted storage and schema migration (the Rust store schema is
+   reduced and does not read the Go vault1 envelope).
+2. Account CRUD beyond add/delete/enable: update, import/export, OAuth,
+   credential refresh, quota refresh.
+3. Admin lockout on named-key management, password step-up, enrollment expiry,
+   passkeys.
+4. OpenAI streaming chunk relay (Anthropic SSE -> chat.completion.chunk),
+   async ticket and highspeed-card workflows.
+5. Actual billing claim/reset execution and scheduled automation. Request
+   builders and pure decision helpers are not running cron jobs.
+6. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits
    and no-op implementations are placeholders, not completed integrations.
-8. Release packaging, rollback-safe migration, side-by-side traffic validation,
+7. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.
 
 ## Local checks
