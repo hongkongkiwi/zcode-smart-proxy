@@ -69,6 +69,8 @@ pub struct AppState {
     pub sessions: Mutex<HashMap<String, i64>>,
     /// Login lockout (bounded per-client failure tracking, admin.rs).
     pub login_guard: Mutex<crate::admin::LoginGuard>,
+    /// Step-up failures use peer/action buckets independent of login lockout.
+    pub(crate) step_up_guard: Mutex<crate::admin::LoginGuard>,
     /// Rolling in-memory usage log (parity with recordUsage for E2E checks).
     pub usage: Mutex<Vec<UsageRecord>>,
 }
@@ -153,6 +155,7 @@ impl AppState {
             windows: Mutex::new(GwWindowTracker::default()),
             sessions: Mutex::new(HashMap::new()),
             login_guard: Mutex::new(crate::admin::LoginGuard::default()),
+            step_up_guard: Mutex::new(crate::admin::LoginGuard::default()),
             usage: Mutex::new(Vec::new()),
         })
     }

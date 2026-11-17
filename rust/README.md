@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 214 tests across 27 suites, and strict Clippy
+The current workspace run passes 218 tests across 28 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -56,8 +56,10 @@ Go feature parity.
    is running before removing it. Normal startup still refuses Go databases.
 2. Account import/export, OAuth, credential refresh, and quota refresh. Metadata
    updates now cover group, remark, enabled state, priority, and paid fallback.
-3. Admin lockout on named-key management, password step-up, enrollment expiry,
-   passkeys.
+3. Remaining admin step-up surfaces, named-key management, and passkeys. TOTP
+   confirmation now requires the current password and a pending setup less than
+   ten minutes old. Confirmation and disable have separate peer/action throttles;
+   disable requires both password and an active factor or recovery proof.
 4. Broader OpenAI compatibility coverage beyond the current streaming tests,
    plus async ticket and highspeed-card workflows.
 5. Actual billing claim/reset execution and scheduled automation. Request

@@ -324,6 +324,8 @@ async fn failed_public_settings_batch_rolls_back_database_and_memory() {
 #[tokio::test]
 async fn totp_setup_and_confirmation_encrypt_secrets_and_recovery_hashes() {
     let f = Fixture::new();
+    let password = "PUBLIC-totp-storage-password";
+    f.seed_setting("admin_password_hash", &bcrypt::hash(password, 4).unwrap());
     let (status, setup) = f.request("POST", "/api/auth/totp/setup", json!({})).await;
     assert_eq!(status, StatusCode::OK);
     let secret = setup["secret"].as_str().unwrap();
@@ -332,7 +334,11 @@ async fn totp_setup_and_confirmation_encrypt_secrets_and_recovery_hashes() {
     let decoded = zcode_core::base32_decode(secret).unwrap();
     let code = zcode_core::totp_now(&decoded, now_secs());
     let (status, confirmed) = f
-        .request("POST", "/api/auth/totp/confirm", json!({"code":code}))
+        .request(
+            "POST",
+            "/api/auth/totp/confirm",
+            json!({"code":code, "current_password":password}),
+        )
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(confirmed["enabled"], true);
@@ -372,8 +378,11 @@ async fn failed_totp_setup_does_not_publish_a_new_pending_secret() {
 #[tokio::test]
 async fn failed_totp_confirmation_does_not_partially_enable_enrollment() {
     let f = Fixture::new();
+    let password = "PUBLIC-totp-storage-password";
+    f.seed_setting("admin_password_hash", &bcrypt::hash(password, 4).unwrap());
     let secret = zcode_core::new_totp_secret();
     f.seed_setting("totp_secret_pending", &secret);
+    f.seed_setting("totp_setup_expires_at", &(now_secs() + 600).to_string());
     f.seed_setting("totp_enabled", "0");
     let before_db = f.stored_settings();
     let before_memory = f.memory_settings();
@@ -385,7 +394,11 @@ async fn failed_totp_confirmation_does_not_partially_enable_enrollment() {
     let decoded = zcode_core::base32_decode(&secret).unwrap();
     let code = zcode_core::totp_now(&decoded, now_secs());
     let (status, _) = f
-        .request("POST", "/api/auth/totp/confirm", json!({"code":code}))
+        .request(
+            "POST",
+            "/api/auth/totp/confirm",
+            json!({"code":code, "current_password":password}),
+        )
         .await;
     assert!(status.is_server_error(), "failed TOTP confirmation returned {status}");
     assert_eq!(f.stored_settings(), before_db);

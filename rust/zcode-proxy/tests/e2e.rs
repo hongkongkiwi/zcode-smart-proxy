@@ -426,7 +426,7 @@ async fn totp_second_factor_flow() {
     // Confirm with the current code (computed locally from the secret).
     let secret = zcode_core::base32_decode(&secret_b32).unwrap();
     let code = zcode_core::totp_now(&secret, zcode_proxy::auth::now_secs());
-    let confirm_body = json!({"code": code}).to_string();
+    let confirm_body = json!({"code": code, "current_password": password}).to_string();
     let req3 = Request::builder()
         .method("POST")
         .uri("/api/auth/totp/confirm")

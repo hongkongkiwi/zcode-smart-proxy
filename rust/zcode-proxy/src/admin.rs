@@ -491,8 +491,12 @@ pub async fn handle_totp_setup(
     let email = state
         .setting("admin_username")
         .unwrap_or_else(|| "admin".into());
+    let expires_at = (now_secs() + 600).to_string();
     if state
-        .persist_settings(&[("totp_secret_pending", &secret)])
+        .persist_settings(&[
+            ("totp_secret_pending", &secret),
+            ("totp_setup_expires_at", &expires_at),
+        ])
         .is_err()
     {
         return storage_error();
@@ -507,11 +511,11 @@ pub async fn handle_totp_setup(
         .into_response()
 }
 
-/// Confirm enrollment: verify a code against the pending secret, then swap
-/// it in as the active secret, generate recovery codes (shown once).
+/// Confirm enrollment with current-password step-up and a fresh pending code.
 pub async fn handle_totp_confirm(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     body: String,
 ) -> Response {
     if session_token(&headers)
@@ -520,34 +524,72 @@ pub async fn handle_totp_confirm(
     {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
+    let client = peer
+        .map(|axum::Extension(axum::extract::ConnectInfo(addr))| addr.ip().to_string())
+        .unwrap_or_else(|| "local".into());
+    let rate_key = format!("{client}|totp-confirm");
+    // Serialize admission through commit so concurrent proofs cannot bypass the limit.
+    let mut guard = state.step_up_guard.lock().unwrap();
+    if guard.check(&rate_key, now_secs()) > 0 {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"message": "too many attempts"})),
+        )
+            .into_response();
+    }
     let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let password = v
+        .get("current_password")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     let code = v
         .get("code")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     let mut db = state.db.lock().unwrap();
     let mut settings = state.settings.lock().unwrap();
+    if password.is_empty() || !password_ok(settings.get("admin_password_hash").cloned(), password) {
+        guard.record_failure(&rate_key, now_secs());
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"message": "current password incorrect"})),
+        )
+            .into_response();
+    }
+    let now = now_secs();
+    let deadline = settings
+        .get("totp_setup_expires_at")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
     let Some(secret_b32) = settings
         .get("totp_secret_pending")
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && deadline > now)
         .cloned()
     else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": "no pending enrollment"})),
+            Json(json!({"message": "setup expired, start again"})),
         )
             .into_response();
     };
-    let secret = zcode_core::base32_decode(&secret_b32).unwrap_or_default();
-    if !zcode_core::totp_verify(&secret, now_secs(), code) {
+    let valid = zcode_core::base32_decode(&secret_b32)
+        .is_some_and(|secret| zcode_core::totp_verify(&secret, now, code));
+    if !valid {
+        guard.record_failure(&rate_key, now_secs());
         return (
-            StatusCode::UNAUTHORIZED,
+            StatusCode::BAD_REQUEST,
             Json(json!({"message": "code did not verify"})),
         )
             .into_response();
     }
-    let (plain, hashes) = zcode_core::generate_recovery_codes(10);
-    let recovery = zcode_core::recovery_codes_to_json(&hashes);
+    let existing =
+        zcode_core::recovery_codes_from_json(settings.get("recovery_codes").map(String::as_str));
+    let (plain, recovery) = if existing.is_empty() {
+        let (plain, hashes) = zcode_core::generate_recovery_codes(10);
+        (Some(plain), zcode_core::recovery_codes_to_json(&hashes))
+    } else {
+        (None, zcode_core::recovery_codes_to_json(&existing))
+    };
     if state
         .persist_settings_locked(
             &mut db,
@@ -557,13 +599,14 @@ pub async fn handle_totp_confirm(
                 ("totp_enabled", "1"),
                 ("recovery_codes", &recovery),
                 ("totp_secret_pending", ""),
+                ("totp_setup_expires_at", ""),
             ],
         )
         .is_err()
     {
         return storage_error();
     }
-    settings.remove("totp_secret_pending");
+    guard.clear(&rate_key);
     (
         StatusCode::OK,
         Json(json!({"enabled": true, "recovery_codes": plain})),
@@ -571,10 +614,11 @@ pub async fn handle_totp_confirm(
         .into_response()
 }
 
-/// Disable 2FA: requires the admin password.
+/// Disable 2FA with the current password and an active TOTP or recovery proof.
 pub async fn handle_totp_disable(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     body: String,
 ) -> Response {
     if session_token(&headers)
@@ -583,21 +627,70 @@ pub async fn handle_totp_disable(
     {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-    let pw = v
-        .get("password")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    if !password_ok(state.setting("admin_password_hash"), pw) {
+    let client = peer
+        .map(|axum::Extension(axum::extract::ConnectInfo(addr))| addr.ip().to_string())
+        .unwrap_or_else(|| "local".into());
+    let rate_key = format!("{client}|totp-disable");
+    let mut guard = state.step_up_guard.lock().unwrap();
+    if guard.check(&rate_key, now_secs()) > 0 {
         return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"message": "password required to disable"})),
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"message": "too many attempts"})),
         )
             .into_response();
     }
-    if state.persist_settings(&[("totp_enabled", "0")]).is_err() {
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let password = v
+        .get("current_password")
+        .or_else(|| v.get("password"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let code = v
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let mut db = state.db.lock().unwrap();
+    let mut settings = state.settings.lock().unwrap();
+    if password.is_empty() || !password_ok(settings.get("admin_password_hash").cloned(), password) {
+        guard.record_failure(&rate_key, now_secs());
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"message": "current password incorrect"})),
+        )
+            .into_response();
+    }
+    let totp_valid = settings
+        .get("totp_secret")
+        .and_then(|secret| zcode_core::base32_decode(secret))
+        .is_some_and(|secret| zcode_core::totp_verify(&secret, now_secs(), code));
+    let recovery =
+        zcode_core::recovery_codes_from_json(settings.get("recovery_codes").map(String::as_str));
+    // Validate without consuming: proof and all secret cleanup commit together.
+    if !totp_valid && zcode_core::consume_recovery_code(&recovery, code).is_none() {
+        guard.record_failure(&rate_key, now_secs());
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message": "code did not verify"})),
+        )
+            .into_response();
+    }
+    if state
+        .persist_settings_locked(
+            &mut db,
+            &mut settings,
+            &[
+                ("totp_enabled", ""),
+                ("totp_secret", ""),
+                ("recovery_codes", ""),
+                ("totp_secret_pending", ""),
+                ("totp_setup_expires_at", ""),
+            ],
+        )
+        .is_err()
+    {
         return storage_error();
     }
+    guard.clear(&rate_key);
     (StatusCode::OK, Json(json!({"enabled": false}))).into_response()
 }
 
