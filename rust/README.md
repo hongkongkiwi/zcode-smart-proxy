@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 203 tests across 24 suites, and strict Clippy
+The current workspace run passes 207 tests across 25 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -47,7 +47,10 @@ Go feature parity.
    preserves a complete Go database archive and creates a separate encrypted
    runtime projection for accounts, settings, and gateway keys. Historical usage,
    claim schedules, proxy records, and unknown metadata remain in the archive;
-   those features are not activated in Rust. A CLI entrypoint is not wired yet.
+   those features are not activated in Rust. The explicit command is
+   `zcode-proxy-rs import-go <source-db> <destination-dir>`, with the source vault
+   secret supplied through `ZCODE_PROXY_VAULT_SECRET`, never a command argument.
+   It exits after import without starting HTTP or applying bootstrap settings.
    Stop every source writer before import. A forcibly terminated import can
    leave a private `.zcode-import-*` directory; inspect it and confirm no import
    is running before removing it. Normal startup still refuses Go databases.

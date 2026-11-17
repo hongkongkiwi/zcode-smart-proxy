@@ -7,6 +7,32 @@ use zcode_proxy::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let usage = "Usage: zcode-proxy-rs [import-go <source-db> <destination-dir>]\nStop all source writers before importing. Set ZCODE_PROXY_VAULT_SECRET explicitly.";
+    if !args.is_empty() {
+        if (args.len() == 1 && args[0] == "--help")
+            || (args.len() == 2 && args[0] == "import-go" && args[1] == "--help")
+        {
+            println!("{usage}");
+            return Ok(());
+        }
+        if args.len() != 3 || args[0] != "import-go" {
+            return Err(usage.into());
+        }
+        let secret = zeroize::Zeroizing::new(
+            std::env::var("ZCODE_PROXY_VAULT_SECRET")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .ok_or("import-go requires a nonempty ZCODE_PROXY_VAULT_SECRET")?,
+        );
+        let report = zcode_proxy::go_import::import_database(
+            std::path::Path::new(&args[1]),
+            std::path::Path::new(&args[2]),
+            &secret,
+        )?;
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
     let root_key = std::env::var("ZCODE_RS_ROOT_KEY").unwrap_or_default();
     let upstream = AppState::upstream_from_env();
     let bind = std::env::var("ZCODE_RS_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
