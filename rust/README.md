@@ -30,14 +30,16 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 190 tests across 21 suites, and strict Clippy
+The current workspace run passes 195 tests across 22 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
 upstream silence deadline. The scoped stream repair review found the reported
-blocking defects resolved. The workspace formatting check has existing failures in the frozen safety
-regression file, which remains unchanged. These checks do not establish Go
-feature parity.
+blocking defects resolved. Numeric account deletion and enable/disable routes
+have regression coverage for successful writes, missing IDs, and database
+failures. The workspace formatting check has existing failures in the frozen
+safety regression file, which remains unchanged. These checks do not establish
+Go feature parity.
 
 ## Remaining work
 

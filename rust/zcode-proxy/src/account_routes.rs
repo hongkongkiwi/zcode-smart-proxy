@@ -101,14 +101,15 @@ pub async fn handle_account_delete(
     Path(id): Path<i64>,
 ) -> Response {
     let db = state.db.lock().unwrap();
-    if db
-        .execute("DELETE FROM accounts WHERE id = ?1", [id])
-        .is_err()
-    {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage operation failed",
-        );
+    match db.execute("DELETE FROM accounts WHERE id = ?1", [id]) {
+        Ok(0) => return err(StatusCode::NOT_FOUND, "account not found"),
+        Ok(_) => {}
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage operation failed",
+            )
+        }
     }
     state.accounts.lock().unwrap().retain(|a| a.id != id);
     state.creds.lock().unwrap().remove(&id);
@@ -130,17 +131,18 @@ pub async fn handle_account_enabled(
         return err(StatusCode::BAD_REQUEST, "enabled must be a boolean");
     };
     let db = state.db.lock().unwrap();
-    if db
-        .execute(
-            "UPDATE accounts SET enabled = ?1 WHERE id = ?2",
-            rusqlite::params![enabled as i64, id],
-        )
-        .is_err()
-    {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage operation failed",
-        );
+    match db.execute(
+        "UPDATE accounts SET enabled = ?1 WHERE id = ?2",
+        rusqlite::params![enabled as i64, id],
+    ) {
+        Ok(0) => return err(StatusCode::NOT_FOUND, "account not found"),
+        Ok(_) => {}
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage operation failed",
+            )
+        }
     }
     let mut accounts = state.accounts.lock().unwrap();
     if let Some(a) = accounts.iter_mut().find(|a| a.id == id) {
