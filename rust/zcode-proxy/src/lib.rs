@@ -7,6 +7,7 @@ pub mod auth;
 pub mod engine;
 pub mod go_compat;
 pub mod openai_routes;
+mod openai_stream;
 pub mod state;
 pub mod store;
 mod streaming;

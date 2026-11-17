@@ -35,12 +35,29 @@ pub struct Creds {
     pub api_key: String,
 }
 
+#[derive(Clone, Copy)]
+pub struct StreamTimings {
+    pub heartbeat_interval: std::time::Duration,
+    pub silence_timeout: std::time::Duration,
+}
+
+impl Default for StreamTimings {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: std::time::Duration::from_secs(15),
+            silence_timeout: std::time::Duration::from_secs(120),
+        }
+    }
+}
+
 pub struct AppState {
     /// Root key plaintext (empty = named keys only).
     pub root_key: String,
     pub upstream: UpstreamUrls,
+    pub stream_timings: StreamTimings,
     /// SQLite persistence (single connection, Go serialized-writer parity).
     pub db: Mutex<rusqlite::Connection>,
+    pub vault: crate::vault::Vault,
     pub accounts: Mutex<Vec<AccountView>>,
     pub creds: Mutex<HashMap<i64, Creds>>,
     pub named_keys: Mutex<Vec<NamedKey>>,
@@ -91,18 +108,23 @@ impl AppState {
         }
     }
 
-    /// Build state from a DB connection: load settings, accounts, keys.
+    /// Legacy fixture constructor with an ephemeral key. Encrypted databases must
+    /// use try_from_db_with_vault with their persisted key instead.
     pub fn from_db(root_key: String, upstream: UpstreamUrls, db: rusqlite::Connection) -> Self {
-        let settings: HashMap<String, String> = {
-            let mut stmt = db
-                .prepare("SELECT key, value FROM settings")
-                .expect("settings prepare");
-            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .expect("settings query")
-                .filter_map(Result::ok)
-                .collect()
-        };
-        let rows = store::list_accounts(&db);
+        let vault = crate::vault::Vault::ephemeral().expect("generate ephemeral vault");
+        Self::try_from_db_with_vault(root_key, upstream, db, vault)
+            .expect("load database: encrypted stores require an explicit persisted vault")
+    }
+
+    pub fn try_from_db_with_vault(
+        root_key: String,
+        upstream: UpstreamUrls,
+        db: rusqlite::Connection,
+        vault: crate::vault::Vault,
+    ) -> Result<Self, store::StoreError> {
+        store::check_schema(&db)?;
+        let settings = store::load_settings(&db, &vault)?;
+        let rows = store::load_accounts(&db, &vault)?;
         let mut accounts = Vec::new();
         let mut creds = HashMap::new();
         for (a, jwt, key) in rows {
@@ -116,10 +138,12 @@ impl AppState {
             accounts.push(a);
         }
         let named_keys = store::list_gateway_keys(&db);
-        Self {
+        Ok(Self {
             root_key,
             upstream,
+            stream_timings: StreamTimings::default(),
             db: Mutex::new(db),
+            vault,
             accounts: Mutex::new(accounts),
             creds: Mutex::new(creds),
             named_keys: Mutex::new(named_keys),
@@ -130,25 +154,57 @@ impl AppState {
             sessions: Mutex::new(HashMap::new()),
             login_guard: Mutex::new(crate::admin::LoginGuard::default()),
             usage: Mutex::new(Vec::new()),
-        }
+        })
     }
 
     pub fn new(root_key: String, upstream: UpstreamUrls) -> Self {
-        Self {
-            root_key,
-            upstream,
-            db: Mutex::new(store::open(":memory:")),
-            accounts: Mutex::new(Vec::new()),
-            creds: Mutex::new(HashMap::new()),
-            named_keys: Mutex::new(Vec::new()),
-            settings: Mutex::new(HashMap::new()),
-            selector: Mutex::new(Selector::new(StrategyConfig::default())),
-            rpm: Mutex::new(GwRpmTracker::default()),
-            windows: Mutex::new(GwWindowTracker::default()),
-            sessions: Mutex::new(HashMap::new()),
-            login_guard: Mutex::new(crate::admin::LoginGuard::default()),
-            usage: Mutex::new(Vec::new()),
+        Self::from_db(root_key, upstream, store::open(":memory:"))
+    }
+
+    /// Writers hold DB then settings through commit and mirror publication.
+    pub fn persist_settings(&self, values: &[(&str, &str)]) -> Result<(), store::StoreError> {
+        let mut db = self.db.lock().unwrap();
+        let mut settings = self.settings.lock().unwrap();
+        self.persist_settings_locked(&mut db, &mut settings, values)
+    }
+
+    pub(crate) fn persist_settings_locked(
+        &self,
+        db: &mut rusqlite::Connection,
+        settings: &mut HashMap<String, String>,
+        values: &[(&str, &str)],
+    ) -> Result<(), store::StoreError> {
+        // Normalize supplied envelopes too: mirrors always contain plaintext.
+        let plain: Vec<_> = values
+            .iter()
+            .map(|&(key, value)| {
+                let value = if store::sensitive_setting(key) {
+                    self.vault.decrypt(value)?
+                } else {
+                    value.to_owned()
+                };
+                Ok((key, value))
+            })
+            .collect::<Result<_, store::StoreError>>()?;
+        store::persist_settings(db, &self.vault, values)?;
+        for (key, value) in plain {
+            settings.insert(key.to_owned(), value);
         }
+        Ok(())
+    }
+
+    pub fn consume_recovery_code(&self, code: &str) -> Result<bool, store::StoreError> {
+        let mut db = self.db.lock().unwrap();
+        let mut settings = self.settings.lock().unwrap();
+        let hashes = zcode_core::recovery_codes_from_json(
+            settings.get("recovery_codes").map(String::as_str),
+        );
+        let Some(rest) = zcode_core::consume_recovery_code(&hashes, code) else {
+            return Ok(false);
+        };
+        let value = zcode_core::recovery_codes_to_json(&rest);
+        self.persist_settings_locked(&mut db, &mut settings, &[("recovery_codes", &value)])?;
+        Ok(true)
     }
 
     pub fn setting(&self, key: &str) -> Option<String> {

@@ -25,6 +25,14 @@ pub struct Vault {
 }
 
 impl Vault {
+    pub fn ephemeral() -> Result<Self, VaultError> {
+        let mut key = [0u8; 32];
+        OsRng.try_fill_bytes(&mut key).map_err(|_| VaultError)?;
+        Ok(Self {
+            key: Zeroizing::new(key),
+        })
+    }
+
     pub fn from_secret(secret: &str) -> Result<Self, VaultError> {
         if secret.is_empty() {
             return Err(VaultError);
@@ -32,6 +40,99 @@ impl Vault {
         Ok(Self {
             key: Zeroizing::new(Sha256::digest(secret.as_bytes()).into()),
         })
+    }
+
+    /// Resolve a durable seed before runtime startup is allowed to write SQLite.
+    pub fn for_database(path: &str) -> Result<Self, crate::store::StoreError> {
+        use crate::store::StoreError;
+        use std::io::Write;
+        use std::path::Path;
+        if path == ":memory:" {
+            return Ok(Self::ephemeral()?);
+        }
+        // File paths only: URI memory databases belong to fixture constructors.
+        if path.is_empty() || path.starts_with("file:") {
+            return Err(StoreError::Database);
+        }
+        let existing = if Path::new(path)
+            .try_exists()
+            .map_err(|_| StoreError::Database)?
+        {
+            let db = rusqlite::Connection::open_with_flags(
+                path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?;
+            crate::store::check_schema(&db)?;
+            Some(db)
+        } else {
+            None
+        };
+        match std::env::var("ZCODE_PROXY_VAULT_SECRET") {
+            Ok(secret) => return Ok(Self::from_secret(&secret)?),
+            Err(std::env::VarError::NotUnicode(_)) => return Err(StoreError::Vault),
+            Err(std::env::VarError::NotPresent) => (),
+        }
+        let parent = Path::new(path)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let key_path = parent.join("vault.key");
+        match std::fs::read_to_string(&key_path) {
+            Ok(raw) => {
+                let seed = raw.trim();
+                if seed.len() != 64 || !seed.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(StoreError::Vault);
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if std::fs::metadata(&key_path)
+                        .map_err(|_| StoreError::Vault)?
+                        .permissions()
+                        .mode()
+                        & 0o077
+                        != 0
+                    {
+                        return Err(StoreError::Vault);
+                    }
+                }
+                return Ok(Self::from_secret(seed)?);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(StoreError::Vault),
+        }
+        if let Some(db) = existing.as_ref() {
+            if crate::store::has_ciphertext(db)? {
+                return Err(StoreError::Vault);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            return Err(StoreError::Vault);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut bytes = Zeroizing::new([0u8; 32]);
+            OsRng
+                .try_fill_bytes(bytes.as_mut())
+                .map_err(|_| StoreError::Vault)?;
+            let seed = Zeroizing::new(bytes.iter().map(|b| format!("{b:02x}")).collect::<String>());
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&key_path)
+                .map_err(|_| StoreError::Vault)?;
+            file.write_all(seed.as_bytes())
+                .map_err(|_| StoreError::Vault)?;
+            file.write_all(b"\n").map_err(|_| StoreError::Vault)?;
+            file.sync_all().map_err(|_| StoreError::Vault)?;
+            std::fs::File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|_| StoreError::Vault)?;
+            Ok(Self::from_secret(&seed)?)
+        }
     }
 
     pub fn encrypt(&self, plain: &str) -> Result<String, VaultError> {

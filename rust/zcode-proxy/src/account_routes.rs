@@ -19,7 +19,7 @@ fn err(status: StatusCode, msg: &str) -> Response {
         .into_response()
 }
 
-/// Import an account into the reduced Rust store, which is not vault-backed yet.
+/// Import an account with encrypted credentials in the reduced Rust store.
 pub async fn handle_account_add(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     body: String,
@@ -51,7 +51,16 @@ pub async fn handle_account_add(
     if email.is_empty() {
         return err(StatusCode::BAD_REQUEST, "email is required");
     }
-    let account = AccountView {
+    let (jwt, api_key) = match (state.vault.decrypt(&jwt), state.vault.decrypt(&api_key)) {
+        (Ok(jwt), Ok(key)) => (jwt, key),
+        _ => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "credential storage operation failed",
+            )
+        }
+    };
+    let mut account = AccountView {
         id: 0,
         email: email.clone(),
         provider,
@@ -62,22 +71,20 @@ pub async fn handle_account_add(
         paid_fallback: !api_key.is_empty(),
         ..Default::default()
     };
-    let id = {
-        let db = state.db.lock().unwrap();
-        crate::store::upsert_account(&db, &account, &jwt, &api_key)
-    };
+    let db = state.db.lock().unwrap();
+    let id =
+        match crate::store::insert_account_encrypted(&db, &state.vault, &account, &jwt, &api_key) {
+            Ok(id) => id,
+            Err(_) => {
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "storage operation failed",
+                )
+            }
+        };
+    account.id = id;
     let mut accounts = state.accounts.lock().unwrap();
-    accounts.push(AccountView {
-        id,
-        email,
-        provider: account.provider.clone(),
-        enabled: true,
-        status: zcode_core::STATUS_ACTIVE.into(),
-        zcode_jwt: jwt.clone(),
-        api_key: api_key.clone(),
-        paid_fallback: !api_key.is_empty(),
-        ..Default::default()
-    });
+    accounts.push(account);
     state.creds.lock().unwrap().insert(
         id,
         Creds {
@@ -93,9 +100,15 @@ pub async fn handle_account_delete(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Response {
+    let db = state.db.lock().unwrap();
+    if db
+        .execute("DELETE FROM accounts WHERE id = ?1", [id])
+        .is_err()
     {
-        let db = state.db.lock().unwrap();
-        crate::store::delete_account(&db, id);
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage operation failed",
+        );
     }
     state.accounts.lock().unwrap().retain(|a| a.id != id);
     state.creds.lock().unwrap().remove(&id);
@@ -116,9 +129,18 @@ pub async fn handle_account_enabled(
     let Some(enabled) = enabled else {
         return err(StatusCode::BAD_REQUEST, "enabled must be a boolean");
     };
+    let db = state.db.lock().unwrap();
+    if db
+        .execute(
+            "UPDATE accounts SET enabled = ?1 WHERE id = ?2",
+            rusqlite::params![enabled as i64, id],
+        )
+        .is_err()
     {
-        let db = state.db.lock().unwrap();
-        crate::store::set_account_enabled(&db, id, enabled);
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage operation failed",
+        );
     }
     let mut accounts = state.accounts.lock().unwrap();
     if let Some(a) = accounts.iter_mut().find(|a| a.id == id) {
@@ -164,15 +186,15 @@ pub async fn handle_password_change(
             .into_response();
     }
     let new_hash = bcrypt::hash(new_pw, bcrypt::DEFAULT_COST).unwrap();
+    if state
+        .persist_settings(&[("admin_password_hash", &new_hash)])
+        .is_err()
     {
-        let db = state.db.lock().unwrap();
-        crate::store::set_setting(&db, "admin_password_hash", &new_hash);
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage operation failed",
+        );
     }
-    state
-        .settings
-        .lock()
-        .unwrap()
-        .insert("admin_password_hash".into(), new_hash.clone());
     // Restart revokes sessions (Go parity).
     state.sessions.lock().unwrap().clear();
     (StatusCode::OK, Json(json!({"ok": true}))).into_response()

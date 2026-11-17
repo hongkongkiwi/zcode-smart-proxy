@@ -6,21 +6,24 @@ use zcode_proxy::build_router;
 use zcode_proxy::state::AppState;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root_key = std::env::var("ZCODE_RS_ROOT_KEY").unwrap_or_default();
     let upstream = AppState::upstream_from_env();
     let bind = std::env::var("ZCODE_RS_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
     let db_path = std::env::var("ZCODE_RS_DB").unwrap_or_else(|_| "zcode-rs.db".into());
-    let db = zcode_proxy::store::open(&db_path);
-    // Admin password bootstrap: env wins, hashed into settings (Go parity:
-    // the plaintext is never stored).
-    if let Ok(pw) = std::env::var("ZCODE_RS_ADMIN_PASSWORD") {
-        if !pw.is_empty() {
-            let hash = bcrypt::hash(&pw, bcrypt::DEFAULT_COST).expect("hash");
-            zcode_proxy::store::set_setting(&db, "admin_password_hash", &hash);
+    let vault = zcode_proxy::vault::Vault::for_database(&db_path)?;
+    let db = zcode_proxy::store::try_open(&db_path)?;
+    let state = AppState::try_from_db_with_vault(root_key, upstream, db, vault)?;
+    // The bootstrap environment must not overwrite a rotated stored password.
+    if state.setting("admin_password_hash").is_none() {
+        if let Ok(pw) = std::env::var("ZCODE_RS_ADMIN_PASSWORD") {
+            if !pw.is_empty() {
+                let hash = bcrypt::hash(&pw, bcrypt::DEFAULT_COST)?;
+                state.persist_settings(&[("admin_password_hash", &hash)])?;
+            }
         }
     }
-    let state = Arc::new(AppState::from_db(root_key, upstream, db));
+    let state = Arc::new(state);
 
     let app = build_router(state);
 
@@ -30,6 +33,6 @@ async fn main() {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .await
-    .unwrap();
+    .await?;
+    Ok(())
 }

@@ -168,11 +168,38 @@ impl Drop for Recorder {
     }
 }
 
+// OpenAI adapters validate their output before committing the original body's usage.
+#[derive(Clone)]
+pub(crate) struct Completion(Arc<std::sync::Mutex<CompletionState>>);
+
+struct CompletionState {
+    recorder: Recorder,
+    deferred: bool,
+}
+
+impl Completion {
+    pub(crate) fn defer(&self) {
+        self.0.lock().unwrap().deferred = true;
+    }
+
+    pub(crate) fn finish(&self, status: u16) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .recorder
+            .finish(status)
+            .map_err(|error| {
+                eprintln!("stream accounting failed: {error}");
+                "durable usage accounting failed".to_string()
+            })
+    }
+}
+
 type Upstream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
 
 struct Relay {
     upstream: Upstream,
-    recorder: Recorder,
+    completion: Completion,
     done: bool,
     status: u16,
 }
@@ -193,8 +220,7 @@ pub(crate) fn response(
     gateway_key_id: i64,
 ) -> axum::response::Response {
     let status = upstream.status();
-    let relay = Relay {
-        upstream: Box::pin(upstream.bytes_stream()),
+    let completion = Completion(Arc::new(std::sync::Mutex::new(CompletionState {
         recorder: Recorder {
             state,
             record: Some(UsageRecord {
@@ -205,6 +231,11 @@ pub(crate) fn response(
             }),
             sniff: UsageSniffer::default(),
         },
+        deferred: false,
+    })));
+    let relay = Relay {
+        upstream: Box::pin(upstream.bytes_stream()),
+        completion: completion.clone(),
         done: false,
         status: status.as_u16(),
     };
@@ -213,19 +244,37 @@ pub(crate) fn response(
             return None;
         }
         let failure = match relay.upstream.next().await {
-            Some(Ok(bytes)) => match relay.recorder.sniff.feed(&bytes) {
-                Ok(()) => return Some((Ok::<_, std::io::Error>(bytes), relay)),
-                Err(error) => Some(error),
-            },
+            Some(Ok(bytes)) => {
+                let result = relay
+                    .completion
+                    .0
+                    .lock()
+                    .unwrap()
+                    .recorder
+                    .sniff
+                    .feed(&bytes);
+                match result {
+                    Ok(()) => return Some((Ok::<_, std::io::Error>(bytes), relay)),
+                    Err(error) => Some(error),
+                }
+            }
             Some(Err(error)) => Some(format!("upstream stream interrupted: {error}")),
             None => {
-                relay.recorder.sniff.flush();
-                relay.recorder.sniff.failure().map(str::to_owned)
+                let mut completion = relay.completion.0.lock().unwrap();
+                completion.recorder.sniff.flush();
+                completion.recorder.sniff.failure().map(str::to_owned)
             }
         };
         relay.done = true;
         let status = if failure.is_some() { 502 } else { relay.status };
-        let accounting = relay.recorder.finish(status);
+        let accounting = {
+            let mut completion = relay.completion.0.lock().unwrap();
+            if completion.deferred {
+                Ok(())
+            } else {
+                completion.recorder.finish(status)
+            }
+        };
         let failure = match accounting {
             Ok(()) => failure,
             Err(error) => {
@@ -235,12 +284,14 @@ pub(crate) fn response(
         };
         failure.map(|message| (Ok(error_frame(&message)), relay))
     });
-    (
+    let mut response = (
         status,
         [("content-type", "text/event-stream")],
         Body::from_stream(body),
     )
-        .into_response()
+        .into_response();
+    response.extensions_mut().insert(completion);
+    response
 }
 
 #[cfg(test)]

@@ -5,15 +5,83 @@
 
 use rusqlite::Connection;
 
-pub fn open(path: &str) -> Connection {
-    let conn = Connection::open(path).expect("open db");
-    conn.pragma_update(None, "journal_mode", "WAL").ok();
-    conn.pragma_update(None, "busy_timeout", 5000).ok();
-    migrate(&conn);
-    conn
+/// Errors deliberately omit SQL, bound values, and credential material.
+#[derive(Debug)]
+pub enum StoreError {
+    Database,
+    Vault,
+    UnsupportedSchema,
 }
 
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Database => "storage operation failed",
+            Self::Vault => "credential storage operation failed",
+            Self::UnsupportedSchema => "Go database schema requires an explicit importer",
+        })
+    }
+}
+
+impl std::error::Error for StoreError {}
+
+impl From<rusqlite::Error> for StoreError {
+    fn from(_: rusqlite::Error) -> Self {
+        Self::Database
+    }
+}
+
+impl From<crate::vault::VaultError> for StoreError {
+    fn from(_: crate::vault::VaultError) -> Self {
+        Self::Vault
+    }
+}
+
+/// Reject the Go schema before changing pragmas or creating reduced tables.
+pub fn check_schema(conn: &Connection) -> Result<(), StoreError> {
+    for (table, marker) in [("accounts", "user_id"), ("settings", "updated_at")] {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let columns = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        for column in columns {
+            if column? == marker {
+                return Err(StoreError::UnsupportedSchema);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn has_ciphertext(conn: &Connection) -> Result<bool, StoreError> {
+    for (table, query) in [
+        ("accounts", "SELECT EXISTS(SELECT 1 FROM accounts WHERE substr(zcode_jwt,1,7) = 'vault1:' OR substr(api_key,1,7) = 'vault1:')"),
+        ("settings", "SELECT EXISTS(SELECT 1 FROM settings WHERE substr(value,1,7) = 'vault1:')"),
+    ] {
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
+        if exists && conn.query_row(query, [], |r| r.get::<_, bool>(0))? { return Ok(true); }
+    }
+    Ok(false)
+}
+
+pub fn try_open(path: &str) -> Result<Connection, StoreError> {
+    let conn = Connection::open(path)?;
+    check_schema(&conn)?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "busy_timeout", 5000)?;
+    try_migrate(&conn)?;
+    Ok(conn)
+}
+
+/// Fixture convenience; runtime startup uses the fallible API.
+pub fn open(path: &str) -> Connection {
+    try_open(path).expect("open reduced Rust database")
+}
+
+#[cfg(test)]
 fn migrate(conn: &Connection) {
+    try_migrate(conn).expect("migrate fixture database");
+}
+
+fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -55,8 +123,66 @@ fn migrate(conn: &Connection) {
             gateway_key_id INTEGER NOT NULL DEFAULT 0,
             quota_charge INTEGER NOT NULL DEFAULT 0
         );",
+    )?;
+    Ok(())
+}
+
+pub fn sensitive_setting(key: &str) -> bool {
+    matches!(
+        key,
+        "api_key"
+            | "password_hash"
+            | "upstream_proxy"
+            | "totp_secret"
+            | "totp_recovery"
+            | "passkey_credentials"
+            | "passkey_user_handle"
+            | "admin_password_hash"
+            | "totp_secret_pending"
+            | "pending_totp_secret"
+            | "recovery_codes"
     )
-    .expect("migrate");
+}
+
+pub fn load_settings(
+    conn: &Connection,
+    vault: &crate::vault::Vault,
+) -> Result<std::collections::HashMap<String, String>, StoreError> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut settings = std::collections::HashMap::new();
+    for row in rows {
+        let (key, value) = row?;
+        let value = if sensitive_setting(&key) {
+            vault.decrypt(&value)?
+        } else {
+            value
+        };
+        settings.insert(key, value);
+    }
+    Ok(settings)
+}
+
+pub fn persist_settings(
+    conn: &mut Connection,
+    vault: &crate::vault::Vault,
+    values: &[(&str, &str)],
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    for &(key, value) in values {
+        let value = if sensitive_setting(key) {
+            vault.encrypt(value)?
+        } else {
+            value.to_owned()
+        };
+        tx.execute(
+            "INSERT INTO settings(key, value) VALUES(?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = ?2",
+            [key, &value],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
@@ -83,7 +209,28 @@ pub fn upsert_account(
     jwt: &str,
     api_key: &str,
 ) -> i64 {
-    let _ = conn.execute(
+    insert_account(conn, a, jwt, api_key).expect("seed fixture account")
+}
+
+pub fn insert_account_encrypted(
+    conn: &Connection,
+    vault: &crate::vault::Vault,
+    a: &zcode_core::AccountView,
+    jwt: &str,
+    api_key: &str,
+) -> Result<i64, StoreError> {
+    let jwt = vault.encrypt(jwt)?;
+    let api_key = vault.encrypt(api_key)?;
+    insert_account(conn, a, &jwt, &api_key)
+}
+
+fn insert_account(
+    conn: &Connection,
+    a: &zcode_core::AccountView,
+    jwt: &str,
+    api_key: &str,
+) -> Result<i64, StoreError> {
+    conn.execute(
         "INSERT INTO accounts(email, provider, enabled, status, cooling_until,
             paid_cooling_until, paid_fallback, zcode_jwt, api_key, account_group,
             remaining, priority)
@@ -102,8 +249,8 @@ pub fn upsert_account(
             a.remaining,
             a.priority,
         ],
-    );
-    conn.last_insert_rowid()
+    )?;
+    Ok(conn.last_insert_rowid())
 }
 
 pub fn update_account_state(conn: &Connection, id: i64, status: &str, cooling_until: i64) {
@@ -114,41 +261,54 @@ pub fn update_account_state(conn: &Connection, id: i64, status: &str, cooling_un
 }
 
 pub fn list_accounts(conn: &Connection) -> Vec<(zcode_core::AccountView, String, String)> {
-    let mut stmt = match conn.prepare(
+    read_accounts(conn).unwrap_or_default()
+}
+
+pub fn load_accounts(
+    conn: &Connection,
+    vault: &crate::vault::Vault,
+) -> Result<Vec<(zcode_core::AccountView, String, String)>, StoreError> {
+    let mut rows = read_accounts(conn)?;
+    for (account, jwt, key) in &mut rows {
+        *jwt = vault.decrypt(jwt)?;
+        *key = vault.decrypt(key)?;
+        account.zcode_jwt = jwt.clone();
+        account.api_key = key.clone();
+    }
+    Ok(rows)
+}
+
+fn read_accounts(
+    conn: &Connection,
+) -> Result<Vec<(zcode_core::AccountView, String, String)>, StoreError> {
+    let mut stmt = conn.prepare(
         "SELECT id, email, provider, enabled, status, cooling_until,
             paid_cooling_until, paid_fallback, zcode_jwt, api_key,
             account_group, remaining, priority FROM accounts",
-    ) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                zcode_core::AccountView {
-                    id: r.get(0)?,
-                    email: r.get(1)?,
-                    provider: r.get(2)?,
-                    enabled: r.get::<_, i64>(3)? != 0,
-                    status: r.get(4)?,
-                    cooling_until: r.get(5)?,
-                    paid_cooling_until: r.get(6)?,
-                    paid_fallback: r.get::<_, i64>(7)? != 0,
-                    zcode_jwt: r.get(8)?,
-                    api_key: r.get(9)?,
-                    account_group: r.get(10)?,
-                    remaining: r.get(11)?,
-                    priority: r.get(12)?,
-                },
-                r.get::<_, String>(8)?,
-                r.get::<_, String>(9)?,
-            ))
-        })
-        .ok();
-    match rows {
-        Some(iter) => iter.filter_map(Result::ok).collect(),
-        None => Vec::new(),
-    }
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            zcode_core::AccountView {
+                id: r.get(0)?,
+                email: r.get(1)?,
+                provider: r.get(2)?,
+                enabled: r.get::<_, i64>(3)? != 0,
+                status: r.get(4)?,
+                cooling_until: r.get(5)?,
+                paid_cooling_until: r.get(6)?,
+                paid_fallback: r.get::<_, i64>(7)? != 0,
+                zcode_jwt: r.get(8)?,
+                api_key: r.get(9)?,
+                account_group: r.get(10)?,
+                remaining: r.get(11)?,
+                priority: r.get(12)?,
+            },
+            r.get::<_, String>(8)?,
+            r.get::<_, String>(9)?,
+        ))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
 }
 
 pub fn delete_account(conn: &Connection, id: i64) {

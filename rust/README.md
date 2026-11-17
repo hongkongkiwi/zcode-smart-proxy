@@ -16,8 +16,10 @@ production Go database.
 - True incremental streaming with bounded SSE sniffing, empty-stream error
   frames, and disconnect-aware usage accounting.
 - Account and authentication handlers exist, but their security and persistence
-  behavior is not yet verified for cutover. Account writes currently store
-  credentials without vault encryption. Router regressions now cover password
+  behavior is not yet verified for cutover. Account credentials and private
+  settings now use vault encryption. Eighteen persistence regressions cover
+  encrypted writes, secure reloads, and rollback on database failures.
+  Router regressions cover password
   and second-factor lockout plus mutation Origin rejection. Lockout currently
   uses the socket peer IP, not untrusted forwarded headers. Clients behind one
   reverse proxy still share its bucket; explicit trusted-proxy handling remains
@@ -28,22 +30,26 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace test run passes 154 tests across 14 suites, and strict
-Clippy passes. Changed-file formatting passes. The workspace formatting check
-still fails on existing formatting in the frozen safety regression file, which
-was left unchanged. These checks do not establish Go feature parity.
+The current workspace run passes 190 tests across 21 suites, and strict Clippy
+passes. This includes encrypted storage, startup key handling, and OpenAI
+streaming regressions. Stream failures record one durable error status, malformed
+frames cannot finish successfully, and generated heartbeats do not postpone the
+upstream silence deadline. The scoped stream repair review found the reported
+blocking defects resolved. The workspace formatting check has existing failures in the frozen safety
+regression file, which remains unchanged. These checks do not establish Go
+feature parity.
 
 ## Remaining work
 
-1. Compatible encrypted storage and schema migration. The Rust runtime store
-   still uses a reduced schema and is not wired to vault encryption. Read-only
-   Go account helpers are separate from runtime startup and do not migrate data.
+1. Full Go data migration. The encrypted Rust runtime store still uses a reduced
+   schema and refuses Go databases. Read-only Go account helpers are separate
+   from runtime startup and do not migrate data.
 2. Account CRUD beyond add/delete/enable: update, import/export, OAuth,
    credential refresh, quota refresh.
 3. Admin lockout on named-key management, password step-up, enrollment expiry,
    passkeys.
-4. OpenAI streaming chunk relay (Anthropic SSE -> chat.completion.chunk),
-   async ticket and highspeed-card workflows.
+4. Broader OpenAI compatibility coverage beyond the current streaming tests,
+   plus async ticket and highspeed-card workflows.
 5. Actual billing claim/reset execution and scheduled automation. Request
    builders and pure decision helpers are not running cron jobs.
 6. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits

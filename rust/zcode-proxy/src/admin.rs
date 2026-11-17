@@ -20,6 +20,14 @@ use crate::store;
 pub const SESSION_TTL_SECS: i64 = 86_400;
 pub const SESSION_COOKIE: &str = "zcode_rs_session";
 
+fn storage_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"message": "storage operation failed"})),
+    )
+        .into_response()
+}
+
 /// Login lockout (Go auth.go parity): after LOCKOUT_THRESHOLD failures from
 /// one client within the window, further attempts are rejected until the
 /// window lapses. Bounded per-client state; stale clients are pruned when
@@ -173,23 +181,10 @@ pub async fn handle_login(
             }
         }
         if !second_ok {
-            let hashes_raw = state.setting("recovery_codes");
-            let hashes = zcode_core::recovery_codes_from_json(hashes_raw.as_deref());
-            if let Some(rest) = zcode_core::consume_recovery_code(&hashes, code) {
-                {
-                    let db = state.db.lock().unwrap();
-                    store::set_setting(
-                        &db,
-                        "recovery_codes",
-                        &zcode_core::recovery_codes_to_json(&rest),
-                    );
-                }
-                state.settings.lock().unwrap().insert(
-                    "recovery_codes".into(),
-                    zcode_core::recovery_codes_to_json(&rest),
-                );
-                second_ok = true;
-            }
+            second_ok = match state.consume_recovery_code(code) {
+                Ok(consumed) => consumed,
+                Err(_) => return storage_error(),
+            };
         }
         if !second_ok {
             state
@@ -370,23 +365,15 @@ pub async fn handle_put_settings(
             return (StatusCode::BAD_REQUEST, "invalid setting value").into_response();
         }
     }
-    let mut updated = Vec::new();
-    for (k, val) in map {
-        if !SETTINGS_WHITELIST.contains(&k.as_str()) {
-            continue;
-        }
-        let Some(s) = val.as_str() else { continue };
-        state
-            .settings
-            .lock()
-            .unwrap()
-            .insert(k.clone(), s.to_string());
-        {
-            let db = state.db.lock().unwrap();
-            store::set_setting(&db, k, s);
-        }
-        updated.push(k.clone());
+    let values: Vec<_> = map
+        .iter()
+        .filter(|(key, _)| SETTINGS_WHITELIST.contains(&key.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str().unwrap()))
+        .collect();
+    if state.persist_settings(&values).is_err() {
+        return storage_error();
     }
+    let updated: Vec<_> = values.iter().map(|(key, _)| *key).collect();
     (StatusCode::OK, Json(json!({"updated": updated}))).into_response()
 }
 
@@ -492,15 +479,12 @@ pub async fn handle_totp_setup(
     let email = state
         .setting("admin_username")
         .unwrap_or_else(|| "admin".into());
+    if state
+        .persist_settings(&[("totp_secret_pending", &secret)])
+        .is_err()
     {
-        let db = state.db.lock().unwrap();
-        store::set_setting(&db, "totp_secret_pending", &secret);
+        return storage_error();
     }
-    state
-        .settings
-        .lock()
-        .unwrap()
-        .insert("totp_secret_pending".into(), secret.clone());
     (
         StatusCode::OK,
         Json(json!({
@@ -529,7 +513,13 @@ pub async fn handle_totp_confirm(
         .get("code")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    let Some(secret_b32) = state.setting("totp_secret_pending") else {
+    let mut db = state.db.lock().unwrap();
+    let mut settings = state.settings.lock().unwrap();
+    let Some(secret_b32) = settings
+        .get("totp_secret_pending")
+        .filter(|s| !s.is_empty())
+        .cloned()
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"message": "no pending enrollment"})),
@@ -545,26 +535,23 @@ pub async fn handle_totp_confirm(
             .into_response();
     }
     let (plain, hashes) = zcode_core::generate_recovery_codes(10);
+    let recovery = zcode_core::recovery_codes_to_json(&hashes);
+    if state
+        .persist_settings_locked(
+            &mut db,
+            &mut settings,
+            &[
+                ("totp_secret", &secret_b32),
+                ("totp_enabled", "1"),
+                ("recovery_codes", &recovery),
+                ("totp_secret_pending", ""),
+            ],
+        )
+        .is_err()
     {
-        let db = state.db.lock().unwrap();
-        store::set_setting(&db, "totp_secret", &secret_b32);
-        store::set_setting(&db, "totp_enabled", "1");
-        store::set_setting(
-            &db,
-            "recovery_codes",
-            &zcode_core::recovery_codes_to_json(&hashes),
-        );
-        store::set_setting(&db, "totp_secret_pending", "");
+        return storage_error();
     }
-    let mut sm = state.settings.lock().unwrap();
-    sm.insert("totp_secret".into(), secret_b32.clone());
-    sm.insert("totp_enabled".into(), "1".into());
-    sm.insert(
-        "recovery_codes".into(),
-        zcode_core::recovery_codes_to_json(&hashes),
-    );
-    sm.remove("totp_secret_pending");
-    drop(sm);
+    settings.remove("totp_secret_pending");
     (
         StatusCode::OK,
         Json(json!({"enabled": true, "recovery_codes": plain})),
@@ -596,15 +583,9 @@ pub async fn handle_totp_disable(
         )
             .into_response();
     }
-    {
-        let db = state.db.lock().unwrap();
-        store::set_setting(&db, "totp_enabled", "0");
+    if state.persist_settings(&[("totp_enabled", "0")]).is_err() {
+        return storage_error();
     }
-    state
-        .settings
-        .lock()
-        .unwrap()
-        .insert("totp_enabled".into(), "0".into());
     (StatusCode::OK, Json(json!({"enabled": false}))).into_response()
 }
 
