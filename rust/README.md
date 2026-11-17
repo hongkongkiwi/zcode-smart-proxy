@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 207 tests across 25 suites, and strict Clippy
+The current workspace run passes 214 tests across 27 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -54,8 +54,8 @@ Go feature parity.
    Stop every source writer before import. A forcibly terminated import can
    leave a private `.zcode-import-*` directory; inspect it and confirm no import
    is running before removing it. Normal startup still refuses Go databases.
-2. Account CRUD beyond add/delete/enable: update, import/export, OAuth,
-   credential refresh, quota refresh.
+2. Account import/export, OAuth, credential refresh, and quota refresh. Metadata
+   updates now cover group, remark, enabled state, priority, and paid fallback.
 3. Admin lockout on named-key management, password step-up, enrollment expiry,
    passkeys.
 4. Broader OpenAI compatibility coverage beyond the current streaming tests,

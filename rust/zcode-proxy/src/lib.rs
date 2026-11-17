@@ -73,7 +73,8 @@ fn admin_api(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/accounts/:id",
-            axum::routing::delete(crate::account_routes::handle_account_delete),
+            axum::routing::delete(crate::account_routes::handle_account_delete)
+                .put(crate::account_routes::handle_account_update),
         )
         .route(
             "/api/accounts/:id/enabled",

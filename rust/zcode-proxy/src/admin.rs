@@ -304,6 +304,16 @@ pub async fn require_session_mw(
 pub async fn handle_accounts(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Response {
+    let db = state.db.lock().unwrap();
+    let remarks = (|| -> rusqlite::Result<std::collections::HashMap<i64, String>> {
+        let mut stmt = db.prepare("SELECT id, remark FROM accounts")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    })();
+    let remarks = match remarks {
+        Ok(remarks) => remarks,
+        Err(_) => return storage_error(),
+    };
     let accounts = state.accounts.lock().unwrap().clone();
     let list: Vec<serde_json::Value> = accounts
         .iter()
@@ -312,6 +322,8 @@ pub async fn handle_accounts(
                 "id": a.id, "email": a.email, "provider": a.provider,
                 "enabled": a.enabled, "status": a.status,
                 "cooling_until": a.cooling_until, "remaining": a.remaining,
+                "group": a.account_group, "remark": remarks.get(&a.id).map(String::as_str).unwrap_or(""),
+                "priority": a.priority, "paid_fallback": a.paid_fallback,
             })
         })
         .collect();

@@ -1,7 +1,7 @@
 //! SQLite persistence (port of database*.go's minimal surface: settings,
 //! accounts, gateway keys, usage records). Single connection behind a mutex,
-//! matching the Go pool's serialized-writer discipline. Schema migration is
-//! versioned via user_version.
+//! matching the Go pool's serialized-writer discipline. Additive migrations
+//! inspect existing columns before changing the schema.
 
 use rusqlite::Connection;
 
@@ -124,6 +124,18 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
             quota_charge INTEGER NOT NULL DEFAULT 0
         );",
     )?;
+    let mut stmt = conn.prepare("PRAGMA table_info(accounts)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut has_remark = false;
+    for column in columns {
+        has_remark |= column? == "remark";
+    }
+    if !has_remark {
+        conn.execute(
+            "ALTER TABLE accounts ADD COLUMN remark TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
     Ok(())
 }
 

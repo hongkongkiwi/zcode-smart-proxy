@@ -95,6 +95,99 @@ pub async fn handle_account_add(
     (StatusCode::OK, Json(json!({"ok": true, "id": id}))).into_response()
 }
 
+#[derive(serde::Deserialize)]
+struct AccountUpdate {
+    group: Option<String>,
+    remark: Option<String>,
+    enabled: Option<bool>,
+    priority: Option<i64>,
+    paid_fallback: Option<bool>,
+}
+
+/// PUT /api/accounts/{id}
+pub async fn handle_account_update(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    body: String,
+) -> Response {
+    let update: AccountUpdate = match serde_json::from_str(&body) {
+        Ok(update) => update,
+        Err(_) => return err(StatusCode::BAD_REQUEST, "invalid request body"),
+    };
+    if update.priority.is_some_and(|p| !(1..=9999).contains(&p)) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "priority must be between 1 and 9999",
+        );
+    }
+    let mut db = state.db.lock().unwrap();
+    let result = (|| -> rusqlite::Result<bool> {
+        let tx = db.transaction()?;
+        let changed = tx.execute(
+            "UPDATE accounts SET account_group = COALESCE(?1, account_group),
+                remark = COALESCE(?2, remark), enabled = COALESCE(?3, enabled),
+                paid_fallback = COALESCE(?4, paid_fallback),
+                status = CASE WHEN ?3 = 0 THEN 'disabled'
+                    WHEN ?3 = 1 AND status = 'disabled' THEN 'active'
+                    ELSE status END
+             WHERE id = ?5",
+            rusqlite::params![
+                update.group,
+                update.remark,
+                update.enabled,
+                update.paid_fallback,
+                id
+            ],
+        )?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        if let Some(priority) = update.priority {
+            tx.execute(
+                "UPDATE accounts SET priority = ?1 WHERE id = ?2",
+                rusqlite::params![priority, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
+    })();
+    match result {
+        Ok(true) => {
+            if let Some(account) = state
+                .accounts
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|a| a.id == id)
+            {
+                if let Some(group) = update.group {
+                    account.account_group = group;
+                }
+                if let Some(enabled) = update.enabled {
+                    account.enabled = enabled;
+                    if !enabled {
+                        account.status = zcode_core::STATUS_DISABLED.into();
+                    } else if account.status == zcode_core::STATUS_DISABLED {
+                        account.status = zcode_core::STATUS_ACTIVE.into();
+                    }
+                }
+                if let Some(priority) = update.priority {
+                    account.priority = priority;
+                }
+                if let Some(paid_fallback) = update.paid_fallback {
+                    account.paid_fallback = paid_fallback;
+                }
+            }
+            (StatusCode::OK, Json(json!({"success": true}))).into_response()
+        }
+        Ok(false) => err(StatusCode::NOT_FOUND, "account not found"),
+        Err(_) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage operation failed",
+        ),
+    }
+}
+
 /// DELETE /api/accounts/{id}
 pub async fn handle_account_delete(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
