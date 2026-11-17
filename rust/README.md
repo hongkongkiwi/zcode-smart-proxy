@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 195 tests across 22 suites, and strict Clippy
+The current workspace run passes 203 tests across 24 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -43,9 +43,14 @@ Go feature parity.
 
 ## Remaining work
 
-1. Full Go data migration. The encrypted Rust runtime store still uses a reduced
-   schema and refuses Go databases. Read-only Go account helpers are separate
-   from runtime startup and do not migrate data.
+1. Full Go runtime data migration. The explicit offline import library now
+   preserves a complete Go database archive and creates a separate encrypted
+   runtime projection for accounts, settings, and gateway keys. Historical usage,
+   claim schedules, proxy records, and unknown metadata remain in the archive;
+   those features are not activated in Rust. A CLI entrypoint is not wired yet.
+   Stop every source writer before import. A forcibly terminated import can
+   leave a private `.zcode-import-*` directory; inspect it and confirm no import
+   is running before removing it. Normal startup still refuses Go databases.
 2. Account CRUD beyond add/delete/enable: update, import/export, OAuth,
    credential refresh, quota refresh.
 3. Admin lockout on named-key management, password step-up, enrollment expiry,

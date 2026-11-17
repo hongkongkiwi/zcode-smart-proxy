@@ -20,7 +20,7 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 bcrypt = "0.15"
 rand = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 tower = { version = "0.5", features = ["util"] }
 zcode-core = { path = "../zcode-core" }
 zeroize = "1"
