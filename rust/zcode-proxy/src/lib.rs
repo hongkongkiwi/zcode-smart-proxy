@@ -10,6 +10,7 @@ pub mod account_refresh;
 pub mod account_routes;
 pub mod admin;
 pub mod auth;
+mod cron;
 mod desktop_credentials;
 pub mod engine;
 pub mod gateway_admin;
@@ -17,6 +18,7 @@ pub mod go_compat;
 pub mod go_import;
 pub mod openai_routes;
 mod openai_stream;
+mod plan_admin;
 pub mod state;
 pub mod store;
 mod streaming;
@@ -75,6 +77,16 @@ fn data_plane(state: Arc<AppState>) -> Router {
 fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
+        .route(
+            "/api/plans",
+            get(plan_admin::handle_list).post(plan_admin::handle_create),
+        )
+        .route(
+            "/api/plans/:id",
+            put(plan_admin::handle_update).delete(plan_admin::handle_delete),
+        )
+        .route("/api/claim-records", get(plan_admin::handle_claim_records))
+        .route("/api/plan-runs", get(plan_admin::handle_plan_runs))
         .route(
             "/api/keys",
             get(gateway_admin::handle_list).post(gateway_admin::handle_create),

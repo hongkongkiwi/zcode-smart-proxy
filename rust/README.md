@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 305 tests across 53 suites, and strict Clippy
+The current workspace run passes 314 tests across 54 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -99,8 +99,11 @@ fixtures. These checks do not establish Go feature parity.
    profile/JWT lookup, but rejects known synthetic identity formats. Successful
    claims and resets commit their audit before optional billing confirmation;
    cancellation during confirmation preserves the remote acknowledgement.
-   Scheduled claims, run history, reset-history synchronization, and automatic
-   reset lifecycle remain unfinished. The default CAPTCHA solver fails closed; claims need a real
+   Plan CRUD, five-field cron validation, next-run display, and claim/run history
+   readers exist with session protection and bounded queries. Plans do not run
+   yet. Scheduler lifecycle, run-once execution, reset-history synchronization,
+   and automatic reset remain unfinished. The default CAPTCHA solver fails
+   closed; claims need a real
    solver before operational use. Unknown-price grants are not automatically
    claimed, and highspeed consumption remains opt-in.
 6. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits

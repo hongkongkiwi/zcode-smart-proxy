@@ -136,6 +136,41 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
             quota_total INTEGER NOT NULL DEFAULT 0,
             quota_used INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS claim_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_name TEXT NOT NULL DEFAULT '',
+            cron_expr TEXT NOT NULL DEFAULT '0 9 * * *',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            target_type TEXT NOT NULL DEFAULT 'all_accounts',
+            account_id INTEGER NOT NULL DEFAULT 0,
+            account_group TEXT NOT NULL DEFAULT '',
+            task_type TEXT NOT NULL DEFAULT 'claim',
+            auto_pick INTEGER NOT NULL DEFAULT 1,
+            delay_seconds INTEGER NOT NULL DEFAULT 30,
+            last_run_at TEXT NOT NULL DEFAULT '',
+            last_run_status TEXT NOT NULL DEFAULT '',
+            last_run_msg TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_claim_plans_active ON claim_plans(is_active);
+        CREATE TABLE IF NOT EXISTS plan_run_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL DEFAULT 0,
+            plan_name TEXT NOT NULL DEFAULT '',
+            task_type TEXT NOT NULL DEFAULT '',
+            target_type TEXT NOT NULL DEFAULT '',
+            account_id INTEGER NOT NULL DEFAULT 0,
+            run_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+            status TEXT NOT NULL DEFAULT '',
+            message TEXT NOT NULL DEFAULT '',
+            total INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            fail_count INTEGER NOT NULL DEFAULT 0,
+            duration_ms INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_plan_run_records_run_at ON plan_run_records(run_at);
+        CREATE INDEX IF NOT EXISTS idx_plan_run_records_plan ON plan_run_records(plan_id);
         CREATE TABLE IF NOT EXISTS claim_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
