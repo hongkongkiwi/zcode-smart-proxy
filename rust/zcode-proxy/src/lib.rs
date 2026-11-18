@@ -2,6 +2,7 @@
 //! (bin entrypoint in main.rs).
 
 pub mod account_bundle;
+pub mod account_local;
 pub mod account_oauth;
 pub mod account_paste;
 pub mod account_refresh;
@@ -120,6 +121,10 @@ fn admin_api(state: Arc<AppState>) -> Router {
         .route("/api/usage-records", get(admin::handle_usage))
         .route("/api/stats", get(admin::handle_stats))
         .route("/api/logout", post(admin::handle_logout))
+        .route(
+            "/api/accounts/import/local",
+            post(account_local::handle_import),
+        )
         .route("/api/auth/check", get(admin::handle_check))
         .route("/api/auth/totp/setup", post(admin::handle_totp_setup))
         .route("/api/auth/totp/confirm", post(admin::handle_totp_confirm))

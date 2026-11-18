@@ -124,6 +124,8 @@ pub struct AppState {
     pub management: ManagementUrls,
     pub oauth: OAuthUrls,
     pub oauth_poll: PollOAuthUrls,
+    /// An explicit credential file confines local import to it and its siblings.
+    pub local_credentials_path: Option<std::path::PathBuf>,
     pub(crate) oauth_flows: Mutex<crate::account_oauth::FlowStore>,
     pub(crate) quota_refresh_inflight: Mutex<std::collections::HashSet<i64>>,
     pub(crate) token_refresh_attempts: Mutex<HashMap<i64, std::time::Instant>>,
@@ -219,6 +221,7 @@ impl AppState {
             management: ManagementUrls::default(),
             oauth: OAuthUrls::default(),
             oauth_poll: PollOAuthUrls::default(),
+            local_credentials_path: None,
             oauth_flows: Mutex::new(crate::account_oauth::FlowStore::default()),
             quota_refresh_inflight: Mutex::new(std::collections::HashSet::new()),
             token_refresh_attempts: Mutex::new(HashMap::new()),
