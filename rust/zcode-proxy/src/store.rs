@@ -408,7 +408,21 @@ pub fn import_bundle_accounts(
     vault: &crate::vault::Vault,
     accounts: &[crate::account_bundle::BundleAccount],
 ) -> Result<Vec<(zcode_core::AccountView, String, String)>, StoreError> {
+    Ok(import_bundle_accounts_with_ids(conn, vault, accounts)?.accounts)
+}
+
+pub(crate) struct ImportResult {
+    pub accounts: Vec<(zcode_core::AccountView, String, String)>,
+    pub ids: Vec<i64>,
+}
+
+pub(crate) fn import_bundle_accounts_with_ids(
+    conn: &mut Connection,
+    vault: &crate::vault::Vault,
+    accounts: &[crate::account_bundle::BundleAccount],
+) -> Result<ImportResult, StoreError> {
     let tx = conn.transaction()?;
+    let mut ids = Vec::with_capacity(accounts.len());
     for a in accounts {
         tx.execute(
             "INSERT INTO accounts(user_id,email,display_name,provider,auth_type,
@@ -448,10 +462,18 @@ pub fn import_bundle_accounts(
                 !a.api_key.is_empty()
             ],
         )?;
+        ids.push(tx.query_row(
+            "SELECT id FROM accounts WHERE user_id = ?1",
+            [&a.user_id],
+            |row| row.get(0),
+        )?);
     }
     let rows = load_accounts(&tx, vault)?;
     tx.commit()?;
-    Ok(rows)
+    Ok(ImportResult {
+        accounts: rows,
+        ids,
+    })
 }
 
 pub fn delete_account(conn: &Connection, id: i64) {

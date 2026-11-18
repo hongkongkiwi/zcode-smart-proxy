@@ -2,6 +2,7 @@
 //! (bin entrypoint in main.rs).
 
 pub mod account_bundle;
+pub mod account_paste;
 pub mod account_routes;
 pub mod admin;
 pub mod auth;
@@ -71,6 +72,10 @@ fn admin_api(state: Arc<AppState>) -> Router {
         .route(
             "/api/accounts/add",
             post(crate::account_routes::handle_account_add),
+        )
+        .route(
+            "/api/accounts/import/paste",
+            post(account_paste::handle_import),
         )
         .route("/api/accounts/export", post(account_bundle::handle_export))
         .route(
