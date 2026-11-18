@@ -37,9 +37,9 @@ frames cannot finish successfully, and generated heartbeats do not postpone the
 upstream silence deadline. The scoped stream repair review found the reported
 blocking defects resolved. Numeric account deletion and enable/disable routes
 have regression coverage for successful writes, missing IDs, and database
-failures. The workspace formatting check has existing failures in the frozen
-safety regression file, which remains unchanged. These checks do not establish
-Go feature parity.
+failures. The workspace formatting check now passes after formatting the safety
+and encrypted-store regression files without changing their assertions or
+fixtures. These checks do not establish Go feature parity.
 
 ## Remaining work
 

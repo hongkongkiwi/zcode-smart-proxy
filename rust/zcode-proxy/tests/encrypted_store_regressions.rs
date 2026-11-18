@@ -54,7 +54,10 @@ impl Fixture {
         let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
             .await
             .unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     fn sql(&self, sql: &str) {
@@ -81,7 +84,9 @@ impl Fixture {
 
     fn stored_settings(&self) -> BTreeMap<String, String> {
         let db = self.state.db.lock().unwrap();
-        let mut stmt = db.prepare("SELECT key, value FROM settings ORDER BY key").unwrap();
+        let mut stmt = db
+            .prepare("SELECT key, value FROM settings ORDER BY key")
+            .unwrap();
         let settings = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
@@ -115,7 +120,10 @@ impl Fixture {
 }
 
 fn assert_encrypted(stored: &str, plain: &str, label: &str) {
-    assert!(stored.starts_with("vault1:"), "{label} is not encrypted at rest");
+    assert!(
+        stored.starts_with("vault1:"),
+        "{label} is not encrypted at rest"
+    );
     assert_ne!(stored, plain, "{label} was stored as plaintext");
 }
 
@@ -223,7 +231,10 @@ async fn invalid_or_foreign_account_envelopes_are_not_accepted_as_credentials() 
             let mut body = json!({"email":"invalid@example.invalid"});
             body[field] = json!(value);
             let (status, _) = f.request("POST", "/api/accounts/add", body).await;
-            assert!(status.is_server_error(), "invalid {field} returned {status}");
+            assert!(
+                status.is_server_error(),
+                "invalid {field} returned {status}"
+            );
             f.assert_no_accounts();
         }
     }
@@ -243,7 +254,11 @@ async fn password_change_encrypts_hash_and_retains_a_usable_live_hash() {
     assert_eq!(status, StatusCode::OK);
     let hash = f.state.setting("admin_password_hash").unwrap();
     assert!(bcrypt::verify(&password, &hash).unwrap());
-    assert_encrypted(&f.stored_settings()["admin_password_hash"], &hash, "admin hash");
+    assert_encrypted(
+        &f.stored_settings()["admin_password_hash"],
+        &hash,
+        "admin hash",
+    );
     assert!(f.state.sessions.lock().unwrap().is_empty());
     let (status, reply) = f
         .request("POST", "/api/login", json!({"password":password}))
@@ -272,7 +287,10 @@ async fn failed_password_write_keeps_old_hash_and_existing_sessions() {
             json!({"current_password":password, "new_password":"PUBLIC replacement password"}),
         )
         .await;
-    assert!(status.is_server_error(), "failed password write returned {status}");
+    assert!(
+        status.is_server_error(),
+        "failed password write returned {status}"
+    );
     assert_eq!(f.stored_settings(), before_db);
     assert_eq!(f.memory_settings(), before_memory);
     assert_eq!(*f.state.sessions.lock().unwrap(), before_sessions);
@@ -316,7 +334,10 @@ async fn failed_public_settings_batch_rolls_back_database_and_memory() {
             json!({"gateway_paused":"1", "selection_strategy":"priority"}),
         )
         .await;
-    assert!(status.is_server_error(), "failed settings batch returned {status}");
+    assert!(
+        status.is_server_error(),
+        "failed settings batch returned {status}"
+    );
     assert_eq!(f.stored_settings(), before_db);
     assert_eq!(f.memory_settings(), before_memory);
 }
@@ -329,8 +350,15 @@ async fn totp_setup_and_confirmation_encrypt_secrets_and_recovery_hashes() {
     let (status, setup) = f.request("POST", "/api/auth/totp/setup", json!({})).await;
     assert_eq!(status, StatusCode::OK);
     let secret = setup["secret"].as_str().unwrap();
-    assert_eq!(f.state.setting("totp_secret_pending").as_deref(), Some(secret));
-    assert_encrypted(&f.stored_settings()["totp_secret_pending"], secret, "pending TOTP secret");
+    assert_eq!(
+        f.state.setting("totp_secret_pending").as_deref(),
+        Some(secret)
+    );
+    assert_encrypted(
+        &f.stored_settings()["totp_secret_pending"],
+        secret,
+        "pending TOTP secret",
+    );
     let decoded = zcode_core::base32_decode(secret).unwrap();
     let code = zcode_core::totp_now(&decoded, now_secs());
     let (status, confirmed) = f
@@ -348,8 +376,14 @@ async fn totp_setup_and_confirmation_encrypt_secrets_and_recovery_hashes() {
     assert_encrypted(&stored["recovery_codes"], &hashes, "recovery code hashes");
     assert_eq!(stored["totp_enabled"], "1");
     assert_eq!(f.state.setting("totp_secret").as_deref(), Some(secret));
-    assert!(f.state.setting("totp_secret_pending").unwrap_or_default().is_empty());
-    assert!(stored.get("totp_secret_pending").is_none_or(String::is_empty));
+    assert!(f
+        .state
+        .setting("totp_secret_pending")
+        .unwrap_or_default()
+        .is_empty());
+    assert!(stored
+        .get("totp_secret_pending")
+        .is_none_or(String::is_empty));
     let hashes = zcode_core::recovery_codes_from_json(Some(&hashes));
     let codes = confirmed["recovery_codes"].as_array().unwrap();
     assert_eq!(codes.len(), 10);
@@ -370,7 +404,10 @@ async fn failed_totp_setup_does_not_publish_a_new_pending_secret() {
          BEGIN SELECT RAISE(FAIL, 'PUBLIC injected setup failure'); END;",
     );
     let (status, _) = f.request("POST", "/api/auth/totp/setup", json!({})).await;
-    assert!(status.is_server_error(), "failed TOTP setup returned {status}");
+    assert!(
+        status.is_server_error(),
+        "failed TOTP setup returned {status}"
+    );
     assert_eq!(f.stored_settings(), before_db);
     assert_eq!(f.memory_settings(), before_memory);
 }
@@ -400,7 +437,10 @@ async fn failed_totp_confirmation_does_not_partially_enable_enrollment() {
             json!({"code":code, "current_password":password}),
         )
         .await;
-    assert!(status.is_server_error(), "failed TOTP confirmation returned {status}");
+    assert!(
+        status.is_server_error(),
+        "failed TOTP confirmation returned {status}"
+    );
     assert_eq!(f.stored_settings(), before_db);
     assert_eq!(f.memory_settings(), before_memory);
 }
@@ -412,7 +452,10 @@ async fn failed_recovery_consumption_does_not_issue_a_session_or_consume_memory(
     let (codes, hashes) = zcode_core::generate_recovery_codes(2);
     f.seed_setting("admin_password_hash", &bcrypt::hash(&password, 4).unwrap());
     f.seed_setting("totp_enabled", "1");
-    f.seed_setting("recovery_codes", &zcode_core::recovery_codes_to_json(&hashes));
+    f.seed_setting(
+        "recovery_codes",
+        &zcode_core::recovery_codes_to_json(&hashes),
+    );
     f.state.sessions.lock().unwrap().clear();
     let before_db = f.stored_settings();
     let before_memory = f.memory_settings();
@@ -422,9 +465,16 @@ async fn failed_recovery_consumption_does_not_issue_a_session_or_consume_memory(
          BEGIN SELECT RAISE(FAIL, 'PUBLIC injected consumption failure'); END;",
     );
     let (status, _) = f
-        .request("POST", "/api/login", json!({"password":password, "code":codes[0]}))
+        .request(
+            "POST",
+            "/api/login",
+            json!({"password":password, "code":codes[0]}),
+        )
         .await;
-    assert!(status.is_server_error(), "failed recovery consumption returned {status}");
+    assert!(
+        status.is_server_error(),
+        "failed recovery consumption returned {status}"
+    );
     assert_eq!(f.stored_settings(), before_db);
     assert_eq!(f.memory_settings(), before_memory);
     assert!(f.state.sessions.lock().unwrap().is_empty());
