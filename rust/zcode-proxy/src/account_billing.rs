@@ -95,10 +95,42 @@ pub(crate) fn load_account(state: &AppState, id: i64) -> Result<Account, Account
             "storage operation failed",
         )
     })?;
+    let identity = identity_snapshot(state, &db, a).map_err(|error| {
+        AccountError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            match error {
+                store::StoreError::Vault => "credential storage operation failed",
+                _ => "storage operation failed",
+            },
+        )
+    })?;
+    Ok(Account {
+        id,
+        email: a.email.clone(),
+        jwt: a.zcode_jwt.clone(),
+        key: a.api_key.clone(),
+        device_mid: identity.device_mid,
+        user_id: identity.user_id,
+        remark: identity.remark,
+    })
+}
+
+pub(crate) struct IdentitySnapshot {
+    pub(crate) device_mid: String,
+    pub(crate) user_id: String,
+    remark: Value,
+}
+
+// Read only: callers decide whether an eligible account needs a durable device identity.
+pub(crate) fn identity_snapshot(
+    state: &AppState,
+    db: &rusqlite::Connection,
+    a: &zcode_core::AccountView,
+) -> Result<IdentitySnapshot, store::StoreError> {
     let (mid, info, access, remark, stored_id) = db
         .query_row(
             "SELECT device_mid,user_info,access_token,remark,COALESCE(user_id,'') FROM accounts WHERE id=?1",
-            [id],
+            [a.id],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -108,25 +140,9 @@ pub(crate) fn load_account(state: &AppState, id: i64) -> Result<Account, Account
                     r.get::<_, String>(4)?,
                 ))
             },
-        )
-        .map_err(|_| {
-            AccountError(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "storage operation failed",
-            )
-        })?;
-    let info = state.vault.decrypt(&info).map_err(|_| {
-        AccountError(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "credential storage operation failed",
-        )
-    })?;
-    let access = state.vault.decrypt(&access).map_err(|_| {
-        AccountError(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "credential storage operation failed",
-        )
-    })?;
+        )?;
+    let info = state.vault.decrypt(&info)?;
+    let access = state.vault.decrypt(&access)?;
     let info: Value = serde_json::from_str(&info).unwrap_or(Value::Null);
     let mut user_id = first_text(&info, &["id", "user_id"]).to_owned();
     if user_id.is_empty() {
@@ -147,11 +163,7 @@ pub(crate) fn load_account(state: &AppState, id: i64) -> Result<Account, Account
     if user_id.is_empty() && !synthetic_user_id(&stored_id) {
         user_id = stored_id;
     }
-    Ok(Account {
-        id,
-        email: a.email.clone(),
-        jwt: a.zcode_jwt.clone(),
-        key: a.api_key.clone(),
+    Ok(IdentitySnapshot {
         device_mid: mid,
         user_id,
         remark: serde_json::from_str(&remark).unwrap_or(Value::Null),

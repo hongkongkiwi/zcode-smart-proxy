@@ -4,7 +4,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     panic::AssertUnwindSafe,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     task::{Context, Poll},
     time::Duration,
 };
@@ -48,6 +51,7 @@ pub struct BackgroundShutdownReport {
 struct Job {
     ready: Instant,
     retries: u8,
+    install_done: bool,
 }
 
 #[derive(Default)]
@@ -61,6 +65,7 @@ struct Control {
 struct Shared {
     state: Arc<AppState>,
     control: Mutex<Control>,
+    stopped: AtomicBool,
     changed: watch::Sender<()>,
 }
 
@@ -83,6 +88,7 @@ impl BackgroundRefresh {
         let shared = Arc::new(Shared {
             state,
             control: Mutex::new(Control::default()),
+            stopped: AtomicBool::new(false),
             changed,
         });
         let runtime = tokio::runtime::Handle::try_current().ok();
@@ -124,6 +130,7 @@ impl BackgroundRefresh {
             Job {
                 ready: Instant::now() + delay,
                 retries: 0,
+                install_done: false,
             },
         );
         self.shared.changed.send_replace(());
@@ -159,6 +166,7 @@ impl BackgroundRefresh {
     pub fn stop(&self) {
         let mut control = self.shared.control.lock().unwrap();
         control.stopped = true;
+        self.shared.stopped.store(true, Ordering::Release);
         control.cancelled += control.pending.len();
         control.pending.clear();
         self.shared.changed.send_replace(());
@@ -228,7 +236,7 @@ async fn work(shared: Arc<Shared>, mut changed: watch::Receiver<()>) {
                 other => (None, other.map(|(_, ready)| ready)),
             }
         };
-        let Some((id, job)) = job else {
+        let Some((id, mut job)) = job else {
             tokio::select! {
                 _ = changed.changed() => (),
                 _ = async {
@@ -240,6 +248,28 @@ async fn work(shared: Arc<Shared>, mut changed: watch::Receiver<()>) {
             }
             continue;
         };
+        if shared.state.install_reporting_enabled && !job.install_done {
+            let install =
+                crate::install_sequence::send_install_sequence_until(&shared.state, id, || {
+                    shared.stopped.load(Ordering::Acquire)
+                });
+            tokio::pin!(install);
+            // Serialize each step's first HTTP poll with stop, while allowing in-flight completion.
+            let installed = AssertUnwindSafe(std::future::poll_fn(|cx| {
+                let _control = shared.control.lock().unwrap();
+                install.as_mut().poll(cx)
+            }))
+            .catch_unwind()
+            .await;
+            match installed {
+                Ok(Err(error)) => {
+                    eprintln!("background install reporting failed for account {id}: {error}");
+                }
+                Err(_) => eprintln!("background install reporting panicked for account {id}"),
+                _ => (),
+            }
+            job.install_done = true;
+        }
         let refresh = account_refresh::refresh_background(&shared.state, id);
         tokio::pin!(refresh);
         let mut first_poll = true;
@@ -269,6 +299,7 @@ async fn work(shared: Arc<Shared>, mut changed: watch::Receiver<()>) {
                             Job {
                                 ready: Instant::now() + BUSY_DELAY,
                                 retries: job.retries + 1,
+                                install_done: job.install_done,
                             },
                         );
                     } else {

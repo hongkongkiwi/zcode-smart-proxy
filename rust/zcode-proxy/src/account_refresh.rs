@@ -479,7 +479,7 @@ pub(crate) fn request_id() -> String {
     )
 }
 
-fn os_version() -> String {
+pub(crate) fn os_version() -> String {
     if std::env::consts::OS != "windows" {
         return String::new();
     }
@@ -500,7 +500,7 @@ fn os_version() -> String {
             return format!("10.0.{build}");
         }
     }
-    "10.0.19044".into()
+    String::new()
 }
 
 pub(crate) enum FetchError {
@@ -521,13 +521,7 @@ impl Client {
             "aarch64" => "arm64",
             other => other,
         };
-        let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| {
-            if os == "windows" {
-                "Asia/Shanghai".into()
-            } else {
-                "UTC".into()
-            }
-        });
+        let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".into());
         let mut headers = reqwest::header::HeaderMap::new();
         for (key, value) in [
             ("user-agent", format!("ZCode/{app_version}")),
