@@ -127,24 +127,34 @@ pub async fn handle_refresh(
     let Ok(id) = id.parse::<i64>() else {
         return error(StatusCode::BAD_REQUEST, "invalid id");
     };
-    let credentials = {
-        let accounts = state.accounts.lock().unwrap();
-        let Some(a) = accounts.iter().find(|a| a.id == id) else {
-            return error(StatusCode::NOT_FOUND, "account not found");
-        };
-        (a.zcode_jwt.clone(), a.api_key.clone())
-    };
     let acquired = state.quota_refresh_inflight.lock().unwrap().insert(id);
     if !acquired {
         return snapshot(&state, id);
     }
     let _flight = Flight { state: &state, id };
-    let device_mid = {
+    let (credentials, device_mid) = {
         let db = state.db.lock().unwrap();
-        match db.query_row("SELECT device_mid FROM accounts WHERE id=?1", [id], |row| {
-            row.get::<_, String>(0)
-        }) {
-            Ok(device_mid) => device_mid,
+        let accounts = state.accounts.lock().unwrap();
+        let Some(account) = accounts.iter().find(|a| a.id == id) else {
+            return error(StatusCode::NOT_FOUND, "account not found");
+        };
+        match db.query_row(
+            "SELECT device_mid,refresh_token FROM accounts WHERE id=?1",
+            [id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            Ok((device_mid, refresh)) => {
+                let Ok(refresh) = state.vault.decrypt(&refresh) else {
+                    return error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "credential storage operation failed",
+                    );
+                };
+                (
+                    (account.zcode_jwt.clone(), account.api_key.clone(), refresh),
+                    device_mid,
+                )
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 return error(StatusCode::NOT_FOUND, "account not found")
             }
@@ -160,13 +170,52 @@ pub async fn handle_refresh(
         Ok(quota) => quota,
         Err(_) => return error(StatusCode::BAD_GATEWAY, "quota retrieval failed"),
     };
+    let exchange = if quota.auth_failed {
+        let eligible = {
+            let db = state.db.lock().unwrap();
+            let accounts = state.accounts.lock().unwrap();
+            accounts.iter().find(|a| a.id == id).is_some_and(|a| {
+                a.provider == "zai"
+                    && a.enabled
+                    && a.status != "disabled"
+                    && a.zcode_jwt == credentials.0
+                    && a.api_key == credentials.1
+                    && !credentials.2.is_empty()
+                    && refresh_matches(&db, &state, id, &credentials.2)
+            })
+        };
+        let attempt = eligible && {
+            let mut attempts = state.token_refresh_attempts.lock().unwrap();
+            if attempts
+                .get(&id)
+                .is_some_and(|last| last.elapsed() < Duration::from_secs(90))
+            {
+                false
+            } else {
+                attempts.insert(id, std::time::Instant::now());
+                true
+            }
+        };
+        if attempt {
+            exchange_token(&state.management.oauth_token, &credentials.2)
+                .await
+                .ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     // Re-read under the writer lock: deletion, disabling, or credential import can race HTTP.
     let db = state.db.lock().unwrap();
     let mut accounts = state.accounts.lock().unwrap();
     let Some(account) = accounts.iter_mut().find(|a| a.id == id) else {
         return error(StatusCode::NOT_FOUND, "account not found");
     };
-    if account.zcode_jwt != credentials.0 || account.api_key != credentials.1 {
+    if account.zcode_jwt != credentials.0
+        || account.api_key != credentials.1
+        || !refresh_matches(&db, &state, id, &credentials.2)
+    {
         return match crate::store::account_public_view(&db, account) {
             Ok(view) => Json(json!({"success":true,"account":view})).into_response(),
             Err(_) => error(
@@ -174,6 +223,30 @@ pub async fn handle_refresh(
                 "storage operation failed",
             ),
         };
+    }
+    if account.enabled && account.status != "disabled" && account.provider == "zai" {
+        if let Some(tokens) = exchange {
+            let mut creds = state.creds.lock().unwrap();
+            if crate::store::update_account_tokens(&db, &state.vault, id, &tokens).is_ok() {
+                account.zcode_jwt = tokens.jwt;
+                account.status = "active".into();
+                account.cooling_until = 0;
+                creds.insert(
+                    id,
+                    crate::state::Creds {
+                        zcode_jwt: account.zcode_jwt.clone(),
+                        api_key: account.api_key.clone(),
+                    },
+                );
+                return match crate::store::account_public_view(&db, account) {
+                    Ok(view) => Json(json!({"success":true,"account":view})).into_response(),
+                    Err(_) => error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "storage operation failed",
+                    ),
+                };
+            }
+        }
     }
     let mut status = account.status.as_str();
     let mut cooling = account.cooling_until;
@@ -247,6 +320,72 @@ pub async fn handle_refresh(
             "storage operation failed",
         ),
     }
+}
+
+fn refresh_matches(db: &rusqlite::Connection, state: &AppState, id: i64, expected: &str) -> bool {
+    db.query_row(
+        "SELECT refresh_token FROM accounts WHERE id=?1",
+        [id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|value| state.vault.decrypt(&value).ok())
+    .is_some_and(|value| value == expected)
+}
+
+async fn exchange_token(
+    url: &str,
+    refresh: &str,
+) -> Result<crate::store::AccountTokens, FetchError> {
+    // Go's refresh POST uses no billing identity or authorization headers.
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| FetchError::Operational)?;
+    let mut response = client
+        .post(parse_url(url)?)
+        .json(&json!({"provider":"zai","refresh_token":refresh}))
+        .send()
+        .await
+        .map_err(|_| FetchError::Operational)?;
+    if !response.status().is_success() {
+        return Err(FetchError::Auth);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| FetchError::Operational)?
+    {
+        if bytes.len() + chunk.len() > 1 << 20 {
+            return Err(FetchError::InvalidBody);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let body: Value = serde_json::from_slice(&bytes).map_err(|_| FetchError::InvalidBody)?;
+    if !business_ok(&body) || !body["data"].is_object() {
+        return Err(FetchError::InvalidBody);
+    }
+    let data = &body["data"];
+    let jwt = text(data, "token");
+    if jwt.is_empty() {
+        return Err(FetchError::InvalidBody);
+    }
+    let zai = &data["zai"];
+    let access = text(zai, "access_token");
+    let access = if access.is_empty() {
+        text(zai, "accessToken")
+    } else {
+        access
+    };
+    Ok(crate::store::AccountTokens {
+        jwt: jwt.to_owned(),
+        access: access.to_owned(),
+        refresh: text(zai, "refresh_token").to_owned(),
+        user_info: String::new(),
+    })
 }
 
 struct Client {

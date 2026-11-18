@@ -77,6 +77,7 @@ pub struct AppState {
     pub upstream: UpstreamUrls,
     pub management: ManagementUrls,
     pub(crate) quota_refresh_inflight: Mutex<std::collections::HashSet<i64>>,
+    pub(crate) token_refresh_attempts: Mutex<HashMap<i64, std::time::Instant>>,
     pub stream_timings: StreamTimings,
     /// SQLite persistence (single connection, Go serialized-writer parity).
     pub db: Mutex<rusqlite::Connection>,
@@ -168,6 +169,7 @@ impl AppState {
             upstream,
             management: ManagementUrls::default(),
             quota_refresh_inflight: Mutex::new(std::collections::HashSet::new()),
+            token_refresh_attempts: Mutex::new(HashMap::new()),
             stream_timings: StreamTimings::default(),
             db: Mutex::new(db),
             vault,

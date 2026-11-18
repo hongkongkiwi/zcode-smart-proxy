@@ -483,6 +483,42 @@ pub(crate) fn import_bundle_accounts_with_ids(
     })
 }
 
+pub(crate) struct AccountTokens {
+    pub jwt: String,
+    pub access: String,
+    pub refresh: String,
+    pub user_info: String,
+}
+
+/// One transaction commits rotated credentials and recovery together.
+/// Empty optional fields retain their existing encrypted values.
+pub(crate) fn update_account_tokens(
+    conn: &Connection,
+    vault: &crate::vault::Vault,
+    id: i64,
+    tokens: &AccountTokens,
+) -> Result<(), StoreError> {
+    let jwt = vault.encrypt(&tokens.jwt)?;
+    let access = vault.encrypt(&tokens.access)?;
+    let refresh = vault.encrypt(&tokens.refresh)?;
+    let user_info = vault.encrypt(&tokens.user_info)?;
+    let tx = conn.unchecked_transaction()?;
+    let changed = tx.execute(
+        "UPDATE accounts SET zcode_jwt=?1,
+            access_token=COALESCE(NULLIF(?2,''),access_token),
+            refresh_token=COALESCE(NULLIF(?3,''),refresh_token),
+            user_info=COALESCE(NULLIF(?4,''),user_info),
+            status='active',cooling_until=0,last_error=''
+         WHERE id=?5 AND enabled<>0 AND status<>'disabled'",
+        rusqlite::params![jwt, access, refresh, user_info, id],
+    )?;
+    if changed != 1 {
+        return Err(StoreError::Database);
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub(crate) fn account_public_view(
     conn: &Connection,
     account: &zcode_core::AccountView,
