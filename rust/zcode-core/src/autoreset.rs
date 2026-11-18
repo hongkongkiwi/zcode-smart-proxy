@@ -6,6 +6,75 @@
 //! lapse — use-it-or-lose-it). Idempotency keys prevent double-spend of the
 //! same slot across concurrent evaluations.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+pub const SPEND_GAP_SECS: u64 = 1800;
+pub const ATTEMPT_INTERVAL_SECS: u64 = 600;
+pub const EXPIRY_WINDOW_DEFAULT_MIN: i64 = 60;
+pub const MIN_WAIT_DEFAULT_MIN: i64 = 60;
+pub const WEEK_WAIT_DEFAULT_HOURS: i64 = 24;
+
+/// Spend when the natural reset wait is unknown or meets the threshold.
+pub fn should_spend(wait_known: bool, wait_secs: i64, threshold_secs: i64) -> bool {
+    !wait_known || wait_secs >= threshold_secs
+}
+
+/// A reset opportunity with an expiry in Unix seconds; zero means unknown.
+pub struct ResetSlot {
+    pub expire_at: i64,
+}
+
+/// Return the earliest positive future expiry within the enabled window.
+pub fn slot_expiring_soon(now_unix: i64, window_secs: i64, slots: &[ResetSlot]) -> Option<i64> {
+    if window_secs <= 0 {
+        return None;
+    }
+    let window_end = now_unix.saturating_add(window_secs);
+    slots
+        .iter()
+        .map(|slot| slot.expire_at)
+        .filter(|&expiry| expiry > 0 && expiry > now_unix && expiry <= window_end)
+        .min()
+}
+
+/// Recent confirmed spends by account. This guard does not reserve a spend.
+/// The caller must hold per-account automation admission across the decision and remote operation.
+#[derive(Default)]
+pub struct SpendGuard {
+    stamps: Mutex<HashMap<i64, (Instant, i64)>>,
+}
+
+impl SpendGuard {
+    /// Record only a confirmed used spend; zero identifies an unattributed spend.
+    pub fn stamp(&self, account_id: i64, at: Instant, slot: i64) {
+        self.stamps.lock().unwrap().insert(account_id, (at, slot));
+    }
+
+    pub fn permits(&self, account_id: i64, expire_at: i64, now: Instant) -> bool {
+        let stamps = self.stamps.lock().unwrap();
+        match stamps.get(&account_id) {
+            Some(&(at, slot)) if within_gap(at, now) => slot != 0 && slot != expire_at,
+            _ => true,
+        }
+    }
+
+    pub fn spent_within_gap(&self, account_id: i64, now: Instant) -> bool {
+        let stamps = self.stamps.lock().unwrap();
+        stamps
+            .get(&account_id)
+            .is_some_and(|&(at, _)| within_gap(at, now))
+    }
+}
+
+fn within_gap(at: Instant, now: Instant) -> bool {
+    match now.checked_duration_since(at) {
+        Some(elapsed) => elapsed < Duration::from_secs(SPEND_GAP_SECS),
+        None => true,
+    }
+}
+
 /// Deterministic idempotency key for the expiring path (Go autoResetIdemKey):
 /// account + slot expiry uniquely identify a spendable slot. The threshold
 /// path has no stable slot identity and must return an empty key (its spend
@@ -32,9 +101,8 @@ pub fn should_spend_expiring(now_unix: i64, expire_at_ms: i64, window_secs: i64)
     expire_at_secs > now_unix && expire_at_secs <= now_unix + window_secs
 }
 
-/// Threshold decision: the account is exhausted and a slot's remaining
-/// lifetime exceeds the minimum-wait (a slot about to lapse anyway is not
-/// worth spending on a full refill).
+/// Legacy threshold decision based on slot lifetime, deprecated for automatic reset.
+/// It does not evaluate the natural reset wait; use `should_spend` for the service.
 pub fn should_spend_threshold(now_unix: i64, expire_at_ms: i64, min_wait_secs: i64) -> bool {
     if expire_at_ms <= 0 {
         // Indefinite slot: always spendable when the account is exhausted.
