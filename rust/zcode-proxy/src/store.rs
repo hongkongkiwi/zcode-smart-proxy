@@ -639,6 +639,18 @@ pub(crate) fn account_public_view(
     )
 }
 
+pub(crate) fn recent_reset_spend(
+    conn: &Connection,
+    account_id: i64,
+    now: i64,
+) -> Result<bool, StoreError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM claim_records WHERE account_id=?1 AND task_type='reset' AND success=1 AND used_at>=?2)",
+        rusqlite::params![account_id, now.saturating_sub(1800)],
+        |row| row.get(0),
+    )?)
+}
+
 pub(crate) struct ClaimRecord<'a> {
     pub account_id: i64,
     pub email: &'a str,

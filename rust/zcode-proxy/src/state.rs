@@ -156,6 +156,8 @@ pub struct AppState {
     pub automation_solver: std::sync::Arc<dyn zcode_core::egress::CaptchaSolver>,
     pub(crate) automation_inflight: Mutex<std::collections::HashSet<i64>>,
     pub(crate) reset_history_synced_at: Mutex<HashMap<i64, std::time::Instant>>,
+    pub(crate) reset_spend_guard: zcode_core::autoreset::SpendGuard,
+    auto_reset: Mutex<Option<std::sync::Weak<crate::autoreset::AutoReset>>>,
     pub(crate) scheduler: Mutex<Option<std::sync::Weak<crate::scheduler::Scheduler>>>,
     background_refresh:
         Mutex<Option<std::sync::Weak<crate::background_refresh::BackgroundRefresh>>>,
@@ -212,6 +214,27 @@ impl UsageRecord {
 }
 
 impl AppState {
+    #[allow(clippy::result_unit_err)] // The slot contract only distinguishes a live occupant.
+    pub fn set_auto_reset(
+        &self,
+        worker: std::sync::Arc<crate::autoreset::AutoReset>,
+    ) -> Result<(), ()> {
+        let mut slot = self.auto_reset.lock().unwrap();
+        if slot.as_ref().and_then(std::sync::Weak::upgrade).is_some() {
+            return Err(());
+        }
+        *slot = Some(std::sync::Arc::downgrade(&worker));
+        Ok(())
+    }
+
+    pub fn auto_reset(&self) -> Option<std::sync::Arc<crate::autoreset::AutoReset>> {
+        self.auto_reset
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     #[allow(clippy::result_unit_err)] // The public slot contract only distinguishes a live occupant.
     pub fn set_background_refresh(
         &self,
@@ -310,6 +333,8 @@ impl AppState {
             automation_solver: std::sync::Arc::new(zcode_core::egress::NoopSolver),
             automation_inflight: Mutex::new(std::collections::HashSet::new()),
             reset_history_synced_at: Mutex::new(HashMap::new()),
+            reset_spend_guard: zcode_core::autoreset::SpendGuard::default(),
+            auto_reset: Mutex::new(None),
             scheduler: Mutex::new(None),
             background_refresh: Mutex::new(None),
             oauth: OAuthUrls::default(),

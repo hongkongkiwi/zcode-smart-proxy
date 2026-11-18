@@ -107,14 +107,18 @@ impl BackgroundRefresh {
     }
 
     pub fn refresh_after_import(&self, account_id: i64) -> bool {
-        self.enqueue(account_id, self.config.import_delay)
+        self.enqueue(account_id, self.config.import_delay, false)
     }
 
     pub fn refresh_after_oauth(&self, account_id: i64) -> bool {
-        self.enqueue(account_id, self.config.oauth_delay)
+        self.enqueue(account_id, self.config.oauth_delay, false)
     }
 
-    fn enqueue(&self, id: i64, delay: Duration) -> bool {
+    pub fn refresh_quota_only(&self, account_id: i64) -> bool {
+        self.enqueue(account_id, Duration::ZERO, true)
+    }
+
+    fn enqueue(&self, id: i64, delay: Duration, quota_only: bool) -> bool {
         if !self.active {
             return false;
         }
@@ -130,7 +134,7 @@ impl BackgroundRefresh {
             Job {
                 ready: Instant::now() + delay,
                 retries: 0,
-                install_done: false,
+                install_done: quota_only,
             },
         );
         self.shared.changed.send_replace(());

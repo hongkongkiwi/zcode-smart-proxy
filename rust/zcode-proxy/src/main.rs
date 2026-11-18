@@ -65,12 +65,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state
         .set_background_refresh(background.clone())
         .map_err(|_| "background refresh already installed")?;
+    let auto_reset = Arc::new(zcode_proxy::autoreset::AutoReset::new(state.clone()));
+    state
+        .set_auto_reset(auto_reset.clone())
+        .map_err(|_| "automatic reset already installed")?;
     let app = build_router(state);
     let (drain, drained) = tokio::sync::oneshot::channel();
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let stopping = scheduler.clone();
     let stopping_background = background.clone();
+    let stopping_auto_reset = auto_reset.clone();
     let signal = async move {
         #[cfg(unix)]
         tokio::select! {
@@ -83,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Err(error) = tokio::signal::ctrl_c().await {
             eprintln!("SIGINT listener failed: {error}");
         }
-        stop_background_work(&stopping, &stopping_background).await;
+        stop_background_work(&stopping, &stopping_background, &stopping_auto_reset).await;
         let _ = drain.send(());
     };
     println!("zcode-proxy-rs listening on {bind}");
@@ -96,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::pin!(server);
     tokio::select! {
         result = &mut server => {
-            stop_background_work(&scheduler, &background).await;
+            stop_background_work(&scheduler, &background, &auto_reset).await;
             result?;
         }
         _ = drained => {
@@ -112,10 +117,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn stop_background_work(
     scheduler: &zcode_proxy::scheduler::Scheduler,
     background: &zcode_proxy::background_refresh::BackgroundRefresh,
+    auto_reset: &zcode_proxy::autoreset::AutoReset,
 ) {
     scheduler.stop();
     background.stop();
-    let (scheduled, refreshed) = tokio::join!(scheduler.shutdown(), background.shutdown());
+    auto_reset.stop();
+    let (scheduled, refreshed, reset) = tokio::join!(
+        scheduler.shutdown(),
+        background.shutdown(),
+        auto_reset.shutdown()
+    );
+    if !reset.drained {
+        eprintln!(
+            "automatic reset shutdown incomplete: abandoned={:?}, cancelled={}",
+            reset.abandoned, reset.cancelled
+        );
+    }
     if !scheduled.tick_stopped || !scheduled.tasks_drained {
         eprintln!(
             "scheduler shutdown incomplete: tick_stopped={}, tasks_drained={}, abandoned={:?}",

@@ -22,8 +22,8 @@ use crate::{
 pub(crate) struct Account {
     pub(crate) id: i64,
     pub(crate) email: String,
-    jwt: String,
-    key: String,
+    pub(crate) jwt: String,
+    pub(crate) key: String,
     device_mid: String,
     user_id: String,
     remark: Value,
@@ -818,7 +818,7 @@ async fn activate_outcome(
     }
 }
 
-async fn reset_status(state: &AppState, a: &Account) -> Result<Value, ()> {
+pub(crate) async fn reset_status(state: &AppState, a: &Account) -> Result<Value, ()> {
     let (status, body) = request(
         state,
         a,
@@ -971,6 +971,63 @@ pub async fn handle_reset_history_sync(
     }
 }
 
+// Caller holds automation admission until the acknowledgement has been audited.
+pub(crate) async fn use_reset(
+    state: &AppState,
+    a: &Account,
+    reset_type: &str,
+    idem: &str,
+    clock: &(dyn Fn() -> i64 + Send + Sync),
+) -> (ResultBody, i64) {
+    let idem = if idem.is_empty() {
+        request_id()
+    } else {
+        idem.to_owned()
+    };
+    let payload = json!({"idempotency_key":idem,"reset_type":reset_type});
+    let mut result = ResultBody::failure("reset response unavailable; consumption is unknown; the slot may already have been consumed");
+    let mut used_at = 0;
+    if let Ok((status, body)) = request(
+        state,
+        a,
+        reqwest::Method::POST,
+        &state.automation.reset_use,
+        Some(&payload),
+        None,
+        true,
+    )
+    .await
+    {
+        result.code = code(&body);
+        result.ok = acknowledged(status, &body) && body["data"]["used"] != false;
+        result.plan_name = format!("配额重置({reset_type})");
+        result.message = if result.ok {
+            "重置成功"
+        } else {
+            "reset rejected or unused"
+        }
+        .into();
+        if result.ok {
+            state
+                .reset_spend_guard
+                .stamp(a.id, std::time::Instant::now(), 0);
+            used_at = clock();
+        }
+    }
+    (result, used_at)
+}
+
+pub(crate) fn auto_reset_plan(result: &mut ResultBody, kind: &str, expiry: bool) {
+    result.plan_name = format!(
+        "配额重置({kind}){}",
+        if expiry {
+            "[自动-临期]"
+        } else {
+            "[自动]"
+        }
+    );
+}
+
 pub async fn handle_reset(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     let a = match account(&state, &id) {
         Ok(a) => a,
@@ -1010,38 +1067,7 @@ pub async fn handle_reset(State(state): State<Arc<AppState>>, Path(id): Path<Str
         result.message = "无可用重置机会".into();
         return publish(&state, &a, "reset", result, 0, None);
     };
-    let payload = json!({"idempotency_key":request_id(),"reset_type":reset_type});
-    let mut used_at = 0;
-    match request(
-        &state,
-        &a,
-        reqwest::Method::POST,
-        &state.automation.reset_use,
-        Some(&payload),
-        None,
-        true,
-    )
-    .await
-    {
-        Ok((status, body)) => {
-            result.code = code(&body);
-            result.ok = acknowledged(status, &body) && body["data"]["used"] != false;
-            result.plan_name = format!("配额重置({reset_type})");
-            result.message = if result.ok {
-                "重置成功"
-            } else {
-                "reset rejected or unused"
-            }
-            .into();
-            if result.ok {
-                used_at = now_secs();
-            }
-        }
-        Err(()) => {
-            result.message =
-                "reset response unavailable; the slot may already have been consumed".into()
-        }
-    }
+    let (result, used_at) = use_reset(&state, &a, reset_type, "", &now_secs).await;
     if result.ok {
         audit_then_confirm(&state, &a, "reset", result, used_at).await
     } else {
