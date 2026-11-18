@@ -630,11 +630,13 @@ pub(crate) fn persist_claim_result(
     quota: Option<ConfirmedQuota<'_>>,
 ) -> Result<(), StoreError> {
     let tx = conn.transaction()?;
-    tx.execute(
-        "UPDATE accounts SET last_claim_at=datetime('now','localtime'),
-            last_claim_plan=?1,last_claim_msg=?2 WHERE id=?3",
-        rusqlite::params![record.plan_name, record.message, record.account_id],
-    )?;
+    if record.task_type != "detect" {
+        tx.execute(
+            "UPDATE accounts SET last_claim_at=datetime('now','localtime'),
+                last_claim_plan=?1,last_claim_msg=?2 WHERE id=?3",
+            rusqlite::params![record.plan_name, record.message, record.account_id],
+        )?;
+    }
     tx.execute(
         "INSERT INTO claim_records(account_id,email,task_type,plan_id,plan_name,success,
             code,message,next_at,used_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
@@ -651,33 +653,52 @@ pub(crate) fn persist_claim_result(
             record.used_at
         ],
     )?;
-    if let Some(ConfirmedQuota {
+    if let Some(quota) = quota {
+        update_confirmed_quota(&tx, record.account_id, quota)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn persist_confirmation(
+    conn: &mut Connection,
+    id: i64,
+    quota: ConfirmedQuota<'_>,
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    update_confirmed_quota(&tx, id, quota)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn update_confirmed_quota(
+    conn: &Connection,
+    id: i64,
+    ConfirmedQuota {
         quota: confirmed,
         account,
         last_error,
-    }) = quota
-    {
-        let quota = serde_json::to_value(confirmed).map_err(|_| StoreError::Database)?;
-        tx.execute(
-            "UPDATE accounts SET quota_json=?1,plan_tier=?2,plan_expire=?3,total_units=?4,
+    }: ConfirmedQuota<'_>,
+) -> Result<(), StoreError> {
+    let quota = serde_json::to_value(confirmed).map_err(|_| StoreError::Database)?;
+    conn.execute(
+        "UPDATE accounts SET quota_json=?1,plan_tier=?2,plan_expire=?3,total_units=?4,
                 used_units=?5,remaining=?6,last_checked_at=?7,status=?9,cooling_until=?10,
                 last_error=COALESCE(?11,last_error) WHERE id=?8",
-            rusqlite::params![
-                quota.to_string(),
-                quota["plan_tier"].as_str().unwrap_or(""),
-                quota["plan_expire"].as_str().unwrap_or(""),
-                quota["total"].as_f64().unwrap_or(0.0),
-                quota["used"].as_f64().unwrap_or(0.0),
-                quota["remaining"].as_f64().unwrap_or(0.0),
-                crate::auth::now_secs(),
-                record.account_id,
-                account.status,
-                account.cooling_until,
-                last_error
-            ],
-        )?;
-    }
-    tx.commit()?;
+        rusqlite::params![
+            quota.to_string(),
+            quota["plan_tier"].as_str().unwrap_or(""),
+            quota["plan_expire"].as_str().unwrap_or(""),
+            quota["total"].as_f64().unwrap_or(0.0),
+            quota["used"].as_f64().unwrap_or(0.0),
+            quota["remaining"].as_f64().unwrap_or(0.0),
+            crate::auth::now_secs(),
+            id,
+            account.status,
+            account.cooling_until,
+            last_error
+        ],
+    )?;
     Ok(())
 }
 

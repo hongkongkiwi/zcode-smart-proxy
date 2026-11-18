@@ -70,9 +70,9 @@ fn account(state: &AppState, id: &str) -> Result<Account, AccountError> {
         .iter()
         .find(|a| a.id == id)
         .ok_or(AccountError(StatusCode::NOT_FOUND, "account not found"))?;
-    let (mid, info, access, remark) = db
+    let (mid, info, access, remark, stored_id) = db
         .query_row(
-            "SELECT device_mid,user_info,access_token,remark FROM accounts WHERE id=?1",
+            "SELECT device_mid,user_info,access_token,remark,COALESCE(user_id,'') FROM accounts WHERE id=?1",
             [id],
             |r| {
                 Ok((
@@ -80,6 +80,7 @@ fn account(state: &AppState, id: &str) -> Result<Account, AccountError> {
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
                 ))
             },
         )
@@ -118,6 +119,9 @@ fn account(state: &AppState, id: &str) -> Result<Account, AccountError> {
             }
         }
     }
+    if user_id.is_empty() && !synthetic_user_id(&stored_id) {
+        user_id = stored_id;
+    }
     Ok(Account {
         id,
         email: a.email.clone(),
@@ -127,6 +131,15 @@ fn account(state: &AppState, id: &str) -> Result<Account, AccountError> {
         user_id,
         remark: serde_json::from_str(&remark).unwrap_or(Value::Null),
     })
+}
+
+fn synthetic_user_id(id: &str) -> bool {
+    let hex =
+        |suffix: &str, len| suffix.len() == len && suffix.bytes().all(|b| b.is_ascii_hexdigit());
+    id.strip_prefix("rust:").is_some_and(|suffix| hex(suffix, 32))
+        || id.strip_prefix("oauth-").is_some_and(|suffix| hex(suffix, 8) || hex(suffix, 64))
+        // The original provider prefix survives later provider metadata changes.
+        || id.rsplit_once('-').is_some_and(|(_, suffix)| hex(suffix, 16))
 }
 
 fn first_text<'a>(v: &'a Value, keys: &[&str]) -> &'a str {
@@ -347,7 +360,7 @@ async fn preview(state: &AppState, a: &Account) -> Result<Vec<Plan>, ()> {
     Ok(plans)
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ResultBody {
     ok: bool,
     code: i64,
@@ -437,7 +450,28 @@ pub async fn handle_detect(State(state): State<Arc<AppState>>, Path(id): Path<St
         Ok(a) => a,
         Err(e) => return e.into_response(),
     };
-    match preview(&state, &a).await {
+    let preview = preview(&state, &a).await;
+    let mut result = ResultBody::failure("billing preview failed");
+    if let Ok(plans) = &preview {
+        result.ok = true;
+        result.code = 0;
+        result.plan_id = plans.first().map(|p| p.plan_id.clone()).unwrap_or_default();
+        result.plan_name = plans
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>()
+            .join("、");
+        result.message = if plans.is_empty() {
+            "无可领取活动".into()
+        } else {
+            format!("发现 {} 个活动: {}", plans.len(), result.plan_name)
+        };
+    }
+    let persisted = publish(&state, &a, "detect", result, 0, None);
+    if persisted.status() != StatusCode::OK {
+        return persisted;
+    }
+    match preview {
         Ok(plans) => Json(json!({"total":plans.len(),"plans":plans})).into_response(),
         Err(()) => error(StatusCode::BAD_GATEWAY, "billing preview failed"),
     }
@@ -534,6 +568,78 @@ async fn claim(state: &AppState, a: &Account) -> ResultBody {
     result
 }
 
+async fn audit_then_confirm(
+    state: &AppState,
+    a: &Account,
+    task: &str,
+    mut result: ResultBody,
+    used_at: i64,
+) -> Response {
+    let audited = publish(state, a, task, result.clone(), used_at, None);
+    if audited.status() != StatusCode::OK {
+        return audited;
+    }
+    let Some(quota) = confirm_action(state, a, &mut result).await else {
+        return Json(result).into_response();
+    };
+    let mut db = state.db.lock().unwrap();
+    let mut accounts = state.accounts.lock().unwrap();
+    let Some(current) = accounts.iter_mut().find(|current| {
+        current.id == a.id && current.zcode_jwt == a.jwt && current.api_key == a.key
+    }) else {
+        result
+            .message
+            .push_str("; confirmed quota discarded because the account changed");
+        return Json(result).into_response();
+    };
+    let mut recovered = current.clone();
+    let (status, cooling, last_error) = quota.confirmed_state(current);
+    recovered.status = status.to_owned();
+    recovered.cooling_until = cooling;
+    recovered.remaining = quota.remaining.unwrap_or(0.0);
+    if store::persist_confirmation(
+        &mut db,
+        a.id,
+        store::ConfirmedQuota {
+            quota: &quota,
+            account: &recovered,
+            last_error,
+        },
+    )
+    .is_err()
+    {
+        return error(StatusCode::INTERNAL_SERVER_ERROR,
+            "local billing persistence failed; remote action is audited but quota was not published");
+    }
+    *current = recovered;
+    Json(result).into_response()
+}
+
+async fn confirm_action(
+    state: &AppState,
+    a: &Account,
+    result: &mut ResultBody,
+) -> Option<account_refresh::Quota> {
+    let current = state.accounts.lock().unwrap().iter().any(|current| {
+        current.id == a.id && current.zcode_jwt == a.jwt && current.api_key == a.key
+    });
+    if !current {
+        result
+            .message
+            .push_str("; quota confirmation skipped because the account changed");
+        return None;
+    }
+    match account_refresh::confirm_billing(state, billing_token(a), &a.device_mid).await {
+        Ok(quota) => Some(quota),
+        Err(_) => {
+            result
+                .message
+                .push_str("; remote action acknowledged but quota confirmation failed");
+            None
+        }
+    }
+}
+
 pub async fn handle_claim(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     let a = match account(&state, &id) {
         Ok(a) => a,
@@ -550,7 +656,11 @@ pub async fn handle_claim(State(state): State<Arc<AppState>>, Path(id): Path<Str
         id: a.id,
     };
     let result = claim(&state, &a).await;
-    publish(&state, &a, "claim", result, 0, None)
+    if result.ok && !result.plan_id.is_empty() {
+        audit_then_confirm(&state, &a, "claim", result, 0).await
+    } else {
+        publish(&state, &a, "claim", result, 0, None)
+    }
 }
 
 pub async fn handle_activate(
@@ -734,5 +844,9 @@ pub async fn handle_reset(State(state): State<Arc<AppState>>, Path(id): Path<Str
                 "reset response unavailable; the slot may already have been consumed".into()
         }
     }
-    publish(&state, &a, "reset", result, used_at, None)
+    if result.ok {
+        audit_then_confirm(&state, &a, "reset", result, used_at).await
+    } else {
+        publish(&state, &a, "reset", result, used_at, None)
+    }
 }
