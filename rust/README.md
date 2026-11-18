@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 273 tests across 45 suites, and strict Clippy
+The current workspace run passes 279 tests across 47 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -54,10 +54,12 @@ fixtures. These checks do not establish Go feature parity.
    Stop every source writer before import. A forcibly terminated import can
    leave a private `.zcode-import-*` directory; inspect it and confirm no import
    is running before removing it. Normal startup still refuses Go databases.
-2. Desktop credential decryption and background account lifecycle. Local import
-   now reads plaintext credentials plus sibling config/telemetry, preserves
-   identity and metadata, and stores credentials encrypted. Desktop `enc:v1:`
-   values currently fail closed rather than being imported. Manual,
+2. Background account lifecycle and multi-instance discovery. Local import reads
+   plaintext and desktop `enc:v1:` credentials plus sibling config/telemetry,
+   preserves identity and metadata, and stores credentials under the runtime
+   vault. Desktop secret derivation follows Go's environment and machine
+   fallback rules, including Node's `darwin` platform name on macOS. Selected
+   corrupt ciphertext fails closed without changing account state. Manual,
    public-callback, and polling OAuth enrollment retrieve identity and API-key
    metadata and persist encrypted accounts. Poll workers have bounded retry,
    expiry, cancellation, and deadline-aware storage admission. Flows have strict expiry, replay

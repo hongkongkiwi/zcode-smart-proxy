@@ -75,14 +75,6 @@ fn local_path(selected: Option<PathBuf>) -> Result<PathBuf, ()> {
     Ok(PathBuf::from(home).join(".zcode/v2/credentials.json"))
 }
 
-fn plaintext(value: &str) -> Result<String, ()> {
-    // Desktop enc:v1 decryption is deferred; ciphertext must never become a login token.
-    if value.starts_with("enc:v1:") {
-        return Err(());
-    }
-    Ok(value.to_owned())
-}
-
 fn string<'a>(value: &'a Value, keys: &[&str]) -> &'a str {
     keys.iter()
         .find_map(|key| {
@@ -107,12 +99,21 @@ fn claims(token: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn read_account(selected: Option<PathBuf>, group: String) -> Result<BundleAccount, ()> {
+fn read_account(
+    selected: Option<PathBuf>,
+    secret: Option<&str>,
+    group: String,
+) -> Result<BundleAccount, ()> {
     let path = local_path(selected)?;
     let directory = path.parent().ok_or(())?;
     let raw = read_file(&path)?.ok_or(())?;
     let credentials: HashMap<String, String> = serde_json::from_str(&raw).map_err(|_| ())?;
-    let decode = |key: &str| plaintext(credentials.get(key).map(String::as_str).unwrap_or(""));
+    let decode = |key: &str| {
+        crate::desktop_credentials::decrypt(
+            credentials.get(key).map(String::as_str).unwrap_or(""),
+            secret,
+        )
+    };
     let provider = decode("oauth:active_provider")?;
     let provider = if provider.is_empty() {
         "zai".to_owned()
@@ -276,8 +277,15 @@ pub async fn handle_import(State(state): State<Arc<AppState>>, request: Request)
     let result = tokio::task::spawn_blocking(move || {
         // Cancellation must not release admission while the blocking job still runs.
         let _permit = permit;
-        let account = read_account(state.local_credentials_path.clone(), request.group)
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        let account = read_account(
+            state.local_credentials_path.clone(),
+            state
+                .local_credentials_secret
+                .as_deref()
+                .map(String::as_str),
+            request.group,
+        )
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
         persist(&state, account).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
     })
     .await;

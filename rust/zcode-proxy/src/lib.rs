@@ -9,6 +9,7 @@ pub mod account_refresh;
 pub mod account_routes;
 pub mod admin;
 pub mod auth;
+mod desktop_credentials;
 pub mod engine;
 pub mod go_compat;
 pub mod go_import;
