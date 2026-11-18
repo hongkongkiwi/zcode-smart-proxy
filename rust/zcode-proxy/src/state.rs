@@ -51,6 +51,33 @@ impl Default for ManagementUrls {
 }
 
 #[derive(Clone)]
+pub struct OAuthUrls {
+    pub authorize: String,
+    pub userinfo: String,
+    pub business_login: String,
+    pub customer_info: String,
+    pub project_keys_base: String,
+    pub manual_redirect: String,
+    pub callback_url: String,
+    pub flow_ttl: std::time::Duration,
+}
+
+impl Default for OAuthUrls {
+    fn default() -> Self {
+        Self {
+            authorize: "https://chat.z.ai/api/oauth/authorize".into(),
+            userinfo: "https://chat.z.ai/api/oauth/userinfo".into(),
+            business_login: "https://api.z.ai/api/auth/z/login".into(),
+            customer_info: "https://api.z.ai/api/biz/customer/getCustomerInfo".into(),
+            project_keys_base: "https://api.z.ai/api/biz/v1/organization".into(),
+            manual_redirect: "https://zcode.z.ai/login".into(),
+            callback_url: "http://127.0.0.1:8787/oauth/callback".into(),
+            flow_ttl: std::time::Duration::from_secs(600),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Creds {
     pub zcode_jwt: String,
     pub api_key: String,
@@ -76,6 +103,8 @@ pub struct AppState {
     pub root_key: String,
     pub upstream: UpstreamUrls,
     pub management: ManagementUrls,
+    pub oauth: OAuthUrls,
+    pub(crate) oauth_flows: Mutex<crate::account_oauth::FlowStore>,
     pub(crate) quota_refresh_inflight: Mutex<std::collections::HashSet<i64>>,
     pub(crate) token_refresh_attempts: Mutex<HashMap<i64, std::time::Instant>>,
     pub stream_timings: StreamTimings,
@@ -168,6 +197,8 @@ impl AppState {
             root_key,
             upstream,
             management: ManagementUrls::default(),
+            oauth: OAuthUrls::default(),
+            oauth_flows: Mutex::new(crate::account_oauth::FlowStore::default()),
             quota_refresh_inflight: Mutex::new(std::collections::HashSet::new()),
             token_refresh_attempts: Mutex::new(HashMap::new()),
             stream_timings: StreamTimings::default(),

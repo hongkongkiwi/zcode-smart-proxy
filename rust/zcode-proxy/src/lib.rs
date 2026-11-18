@@ -2,6 +2,7 @@
 //! (bin entrypoint in main.rs).
 
 pub mod account_bundle;
+pub mod account_oauth;
 pub mod account_paste;
 pub mod account_refresh;
 pub mod account_routes;
@@ -71,6 +72,18 @@ fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
         .route(
+            "/api/accounts/oauth/start",
+            post(account_oauth::handle_start),
+        )
+        .route(
+            "/api/accounts/oauth/manual",
+            post(account_oauth::handle_manual),
+        )
+        .route(
+            "/api/accounts/oauth/status",
+            get(account_oauth::handle_status),
+        )
+        .route(
             "/api/accounts/add",
             post(crate::account_routes::handle_account_add),
         )
@@ -122,6 +135,7 @@ fn admin_api(state: Arc<AppState>) -> Router {
 fn open_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/login", post(admin::handle_login))
+        .route("/oauth/callback", get(account_oauth::handle_callback))
         .route("/web", get(admin::handle_panel))
         .route("/health", get(|| async { "ok" }))
         .with_state(state)
