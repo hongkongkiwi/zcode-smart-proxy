@@ -154,6 +154,8 @@ pub struct AppState {
     pub automation_solver: std::sync::Arc<dyn zcode_core::egress::CaptchaSolver>,
     pub(crate) automation_inflight: Mutex<std::collections::HashSet<i64>>,
     pub(crate) scheduler: Mutex<Option<std::sync::Weak<crate::scheduler::Scheduler>>>,
+    background_refresh:
+        Mutex<Option<std::sync::Weak<crate::background_refresh::BackgroundRefresh>>>,
     pub oauth: OAuthUrls,
     pub oauth_poll: PollOAuthUrls,
     /// An explicit credential file confines local import to it and its siblings.
@@ -207,6 +209,29 @@ impl UsageRecord {
 }
 
 impl AppState {
+    #[allow(clippy::result_unit_err)] // The public slot contract only distinguishes a live occupant.
+    pub fn set_background_refresh(
+        &self,
+        worker: std::sync::Arc<crate::background_refresh::BackgroundRefresh>,
+    ) -> Result<(), ()> {
+        let mut slot = self.background_refresh.lock().unwrap();
+        if slot.as_ref().and_then(std::sync::Weak::upgrade).is_some() {
+            return Err(());
+        }
+        *slot = Some(std::sync::Arc::downgrade(&worker));
+        Ok(())
+    }
+
+    pub fn background_refresh(
+        &self,
+    ) -> Option<std::sync::Arc<crate::background_refresh::BackgroundRefresh>> {
+        self.background_refresh
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     #[allow(clippy::result_unit_err)] // The public slot contract only distinguishes a live occupant.
     pub fn set_scheduler(
         &self,
@@ -280,6 +305,7 @@ impl AppState {
             automation_solver: std::sync::Arc::new(zcode_core::egress::NoopSolver),
             automation_inflight: Mutex::new(std::collections::HashSet::new()),
             scheduler: Mutex::new(None),
+            background_refresh: Mutex::new(None),
             oauth: OAuthUrls::default(),
             oauth_poll: PollOAuthUrls::default(),
             local_credentials_path: None,

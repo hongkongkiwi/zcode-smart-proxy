@@ -1,4 +1,4 @@
-//! Authorization-code and bounded poll login. Background quota/install work is deferred.
+//! Authorization-code and bounded poll login with post-commit quota refresh.
 
 use std::{
     collections::HashMap,
@@ -634,6 +634,15 @@ fn publish_account(
     current.message = "authorization complete";
     current.account_id = id;
     current.email = email;
+    drop(creds);
+    drop(accounts);
+    drop(db);
+    drop(flows);
+    if let Some(worker) = state.background_refresh() {
+        if !worker.refresh_after_oauth(id) {
+            eprintln!("background quota refresh admission refused after OAuth for account {id}");
+        }
+    }
     Ok(())
 }
 

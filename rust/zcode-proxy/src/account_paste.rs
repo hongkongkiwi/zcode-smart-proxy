@@ -156,7 +156,18 @@ pub async fn handle_import(State(state): State<Arc<AppState>>, request: Request)
             accounts.push(account);
         }
     }
+    let id = result.ids[0];
+    drop(creds);
+    drop(accounts);
+    drop(db);
+    if let Some(worker) = state.background_refresh() {
+        if !worker.refresh_after_import(id) {
+            eprintln!(
+                "background quota refresh admission refused after paste import for account {id}"
+            );
+        }
+    }
     let mut public = public;
-    public["id"] = json!(result.ids[0]);
+    public["id"] = json!(id);
     Json(json!({"success": true, "account": public})).into_response()
 }

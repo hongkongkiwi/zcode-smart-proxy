@@ -250,6 +250,16 @@ fn persist(state: &AppState, mut account: BundleAccount) -> Result<Value, ()> {
             accounts.push(account);
         }
     }
+    drop(creds);
+    drop(accounts);
+    drop(db);
+    if let Some(worker) = state.background_refresh() {
+        if !worker.refresh_after_import(id) {
+            eprintln!(
+                "background quota refresh admission refused after local import for account {id}"
+            );
+        }
+    }
     Ok(public)
 }
 

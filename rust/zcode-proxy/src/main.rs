@@ -58,11 +58,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_scheduler(scheduler.clone())
         .map_err(|_| "scheduler already installed")?;
     scheduler.start()?;
+    let background = Arc::new(zcode_proxy::background_refresh::BackgroundRefresh::new(
+        state.clone(),
+    ));
+    state
+        .set_background_refresh(background.clone())
+        .map_err(|_| "background refresh already installed")?;
     let app = build_router(state);
     let (drain, drained) = tokio::sync::oneshot::channel();
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let stopping = scheduler.clone();
+    let stopping_background = background.clone();
     let signal = async move {
         #[cfg(unix)]
         tokio::select! {
@@ -75,13 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Err(error) = tokio::signal::ctrl_c().await {
             eprintln!("SIGINT listener failed: {error}");
         }
-        let report = stopping.shutdown().await;
-        if !report.tick_stopped || !report.tasks_drained {
-            eprintln!(
-                "scheduler shutdown incomplete: tick_stopped={}, tasks_drained={}, abandoned={:?}",
-                report.tick_stopped, report.tasks_drained, report.abandoned
-            );
-        }
+        stop_background_work(&stopping, &stopping_background).await;
         let _ = drain.send(());
     };
     println!("zcode-proxy-rs listening on {bind}");
@@ -94,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::pin!(server);
     tokio::select! {
         result = &mut server => {
-            scheduler.shutdown().await;
+            stop_background_work(&scheduler, &background).await;
             result?;
         }
         _ = drained => {
@@ -105,4 +106,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+async fn stop_background_work(
+    scheduler: &zcode_proxy::scheduler::Scheduler,
+    background: &zcode_proxy::background_refresh::BackgroundRefresh,
+) {
+    scheduler.stop();
+    background.stop();
+    let (scheduled, refreshed) = tokio::join!(scheduler.shutdown(), background.shutdown());
+    if !scheduled.tick_stopped || !scheduled.tasks_drained {
+        eprintln!(
+            "scheduler shutdown incomplete: tick_stopped={}, tasks_drained={}, abandoned={:?}",
+            scheduled.tick_stopped, scheduled.tasks_drained, scheduled.abandoned
+        );
+    }
+    if !refreshed.drained {
+        eprintln!(
+            "background quota shutdown incomplete: abandoned={:?}, cancelled={}",
+            refreshed.abandoned, refreshed.cancelled
+        );
+    }
 }

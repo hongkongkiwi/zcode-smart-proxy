@@ -309,12 +309,14 @@ impl Scheduler {
         }
     }
 
+    pub fn stop(&self) {
+        let mut control = self.shared.control.lock().unwrap();
+        control.stopped = true;
+        self.shared.cancel.send_replace(true);
+    }
+
     pub async fn shutdown(&self) -> ShutdownReport {
-        {
-            let mut control = self.shared.control.lock().unwrap();
-            control.stopped = true;
-            self.shared.cancel.send_replace(true);
-        }
+        self.stop();
         let tick_stopped = tokio::time::timeout(self.shared.config.tick_stop_wait, async {
             loop {
                 let stopped = {

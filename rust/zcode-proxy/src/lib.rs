@@ -10,6 +10,7 @@ pub mod account_refresh;
 pub mod account_routes;
 pub mod admin;
 pub mod auth;
+pub mod background_refresh;
 mod cron;
 mod desktop_credentials;
 pub mod engine;

@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 333 tests across 56 suites, and strict Clippy
+The current workspace run passes 351 tests across 57 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -72,10 +72,14 @@ fixtures. These checks do not establish Go feature parity.
    The exchange request shape follows Go's inferred contract, not a live-provider
    capture.
    Paste import parses and stores JWT/API-key credentials with stable identities
-   and encrypted persistence. Its background quota refresh and installation
-   reporting are not implemented yet. Per-account device identities now persist
-   as UUIDv4 values before quota and billing requests. Startup backfills empty
-   identities atomically; existing identities remain unchanged.
+   and encrypted persistence. Paste, local, and OAuth imports schedule delayed
+   quota refresh through a bounded manager. It deduplicates pending accounts,
+   serializes follow-ups, skips deleted/disabled accounts, and retains in-flight
+   handles when shutdown exceeds its deadline. Bundle and plain-add routes do
+   not schedule refresh, matching Go. Installation reporting and multi-instance
+   discovery remain unfinished. Per-account device identities persist as UUIDv4
+   values before quota and billing requests. Startup backfills empty identities
+   atomically; existing identities remain unchanged.
    Encrypted account bundle export/import now supports Go's current and legacy
    `zcb1:` formats, stable account identities, all bundle metadata, and atomic
    import rollback. Export requires password step-up and checks every stored

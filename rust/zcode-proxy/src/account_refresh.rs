@@ -124,19 +124,44 @@ fn error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
-fn snapshot(state: &AppState, id: i64) -> Response {
-    let db = state.db.lock().unwrap();
-    let accounts = state.accounts.lock().unwrap();
-    let Some(account) = accounts.iter().find(|a| a.id == id) else {
-        return error(StatusCode::NOT_FOUND, "account not found");
-    };
-    match crate::store::account_public_view(&db, account) {
-        Ok(account) => Json(json!({"success":true,"account":account})).into_response(),
-        Err(_) => error(
+#[derive(Debug)]
+pub enum RefreshOutcome {
+    Applied(Value),
+    Inflight(Value),
+    Superseded(Value),
+    Skipped,
+}
+
+#[derive(Debug)]
+pub struct RefreshError {
+    pub status: StatusCode,
+    pub message: &'static str,
+}
+
+fn failure(status: StatusCode, message: &'static str) -> RefreshError {
+    RefreshError { status, message }
+}
+
+fn public_view(
+    db: &rusqlite::Connection,
+    account: &zcode_core::AccountView,
+) -> Result<Value, RefreshError> {
+    crate::store::account_public_view(db, account).map_err(|_| {
+        failure(
             StatusCode::INTERNAL_SERVER_ERROR,
             "storage operation failed",
-        ),
-    }
+        )
+    })
+}
+
+fn snapshot(state: &AppState, id: i64) -> Result<Value, RefreshError> {
+    let db = state.db.lock().unwrap();
+    let accounts = state.accounts.lock().unwrap();
+    let account = accounts
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| failure(StatusCode::NOT_FOUND, "account not found"))?;
+    public_view(&db, account)
 }
 
 pub async fn handle_refresh(
@@ -146,16 +171,43 @@ pub async fn handle_refresh(
     let Ok(id) = id.parse::<i64>() else {
         return error(StatusCode::BAD_REQUEST, "invalid id");
     };
+    match refresh_account(&state, id).await {
+        Ok(
+            RefreshOutcome::Applied(account)
+            | RefreshOutcome::Inflight(account)
+            | RefreshOutcome::Superseded(account),
+        ) => Json(json!({"success":true,"account":account})).into_response(),
+        Ok(RefreshOutcome::Skipped) => unreachable!("manual refresh never skips"),
+        Err(result) => error(result.status, result.message),
+    }
+}
+
+pub async fn refresh_account(state: &AppState, id: i64) -> Result<RefreshOutcome, RefreshError> {
+    refresh_core(state, id, false).await
+}
+
+pub(crate) async fn refresh_background(
+    state: &AppState,
+    id: i64,
+) -> Result<RefreshOutcome, RefreshError> {
+    refresh_core(state, id, true).await
+}
+
+async fn refresh_core(
+    state: &AppState,
+    id: i64,
+    background: bool,
+) -> Result<RefreshOutcome, RefreshError> {
     let acquired = state.quota_refresh_inflight.lock().unwrap().insert(id);
     if !acquired {
-        return snapshot(&state, id);
+        return snapshot(state, id).map(RefreshOutcome::Inflight);
     }
-    let _flight = Flight { state: &state, id };
+    let _flight = Flight { state, id };
     let (credentials, device_mid) = {
         let db = state.db.lock().unwrap();
         let accounts = state.accounts.lock().unwrap();
         let Some(account) = accounts.iter().find(|a| a.id == id) else {
-            return error(StatusCode::NOT_FOUND, "account not found");
+            return Err(failure(StatusCode::NOT_FOUND, "account not found"));
         };
         let exists = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
@@ -163,20 +215,23 @@ pub async fn handle_refresh(
             |row| row.get::<_, bool>(0),
         );
         match exists {
-            Ok(false) => return error(StatusCode::NOT_FOUND, "account not found"),
+            Ok(false) => return Err(failure(StatusCode::NOT_FOUND, "account not found")),
             Err(_) => {
-                return error(
+                return Err(failure(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "storage operation failed",
-                )
+                ))
             }
             Ok(true) => {}
         }
+        if background && (!account.enabled || account.status == "disabled") {
+            return Ok(RefreshOutcome::Skipped);
+        }
         if crate::identity::ensure_locked(&db, id).is_err() {
-            return error(
+            return Err(failure(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "storage operation failed",
-            );
+            ));
         }
         match db.query_row(
             "SELECT device_mid,refresh_token FROM accounts WHERE id=?1",
@@ -185,10 +240,10 @@ pub async fn handle_refresh(
         ) {
             Ok((device_mid, refresh)) => {
                 let Ok(refresh) = state.vault.decrypt(&refresh) else {
-                    return error(
+                    return Err(failure(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "credential storage operation failed",
-                    );
+                    ));
                 };
                 (
                     (account.zcode_jwt.clone(), account.api_key.clone(), refresh),
@@ -196,19 +251,19 @@ pub async fn handle_refresh(
                 )
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                return error(StatusCode::NOT_FOUND, "account not found")
+                return Err(failure(StatusCode::NOT_FOUND, "account not found"))
             }
             Err(_) => {
-                return error(
+                return Err(failure(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "storage operation failed",
-                )
+                ))
             }
         }
     };
-    let quota = match fetch(&state, &credentials.0, &credentials.1, &device_mid).await {
+    let quota = match fetch(state, &credentials.0, &credentials.1, &device_mid).await {
         Ok(quota) => quota,
-        Err(_) => return error(StatusCode::BAD_GATEWAY, "quota retrieval failed"),
+        Err(_) => return Err(failure(StatusCode::BAD_GATEWAY, "quota retrieval failed")),
     };
     let exchange = if quota.auth_failed {
         let eligible = {
@@ -221,7 +276,7 @@ pub async fn handle_refresh(
                     && a.zcode_jwt == credentials.0
                     && a.api_key == credentials.1
                     && !credentials.2.is_empty()
-                    && refresh_matches(&db, &state, id, &credentials.2)
+                    && refresh_matches(&db, state, id, &credentials.2)
             })
         };
         let attempt = eligible && {
@@ -250,19 +305,13 @@ pub async fn handle_refresh(
     let db = state.db.lock().unwrap();
     let mut accounts = state.accounts.lock().unwrap();
     let Some(account) = accounts.iter_mut().find(|a| a.id == id) else {
-        return error(StatusCode::NOT_FOUND, "account not found");
+        return Err(failure(StatusCode::NOT_FOUND, "account not found"));
     };
     if account.zcode_jwt != credentials.0
         || account.api_key != credentials.1
-        || !refresh_matches(&db, &state, id, &credentials.2)
+        || !refresh_matches(&db, state, id, &credentials.2)
     {
-        return match crate::store::account_public_view(&db, account) {
-            Ok(view) => Json(json!({"success":true,"account":view})).into_response(),
-            Err(_) => error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "storage operation failed",
-            ),
-        };
+        return public_view(&db, account).map(RefreshOutcome::Superseded);
     }
     if account.enabled && account.status != "disabled" && account.provider == "zai" {
         if let Some(tokens) = exchange {
@@ -278,14 +327,9 @@ pub async fn handle_refresh(
                         api_key: account.api_key.clone(),
                     },
                 );
-                return match crate::store::account_public_view(&db, account) {
-                    Ok(view) => Json(json!({"success":true,"account":view})).into_response(),
-                    Err(_) => error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "storage operation failed",
-                    ),
-                };
+                return public_view(&db, account).map(RefreshOutcome::Applied);
             }
+            eprintln!("quota refresh token persistence failed for account {id}");
         }
     }
     let mut status = account.status.as_str();
@@ -331,12 +375,12 @@ pub async fn handle_refresh(
         )
     };
     match result {
-        Ok(0) => return error(StatusCode::NOT_FOUND, "account not found"),
+        Ok(0) => return Err(failure(StatusCode::NOT_FOUND, "account not found")),
         Err(_) => {
-            return error(
+            return Err(failure(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "storage operation failed",
-            )
+            ))
         }
         Ok(_) => {}
     }
@@ -345,13 +389,7 @@ pub async fn handle_refresh(
     if !quota.auth_failed && !quota.not_entitled {
         account.remaining = quota.remaining.unwrap_or(0.0);
     }
-    match crate::store::account_public_view(&db, account) {
-        Ok(account) => Json(json!({"success":true,"account":account})).into_response(),
-        Err(_) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage operation failed",
-        ),
-    }
+    public_view(&db, account).map(RefreshOutcome::Applied)
 }
 
 fn refresh_matches(db: &rusqlite::Connection, state: &AppState, id: i64, expected: &str) -> bool {
