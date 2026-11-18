@@ -38,12 +38,16 @@ impl From<crate::vault::VaultError> for StoreError {
 }
 
 /// Reject the Go schema before changing pragmas or creating reduced tables.
+const RUST_APPLICATION_ID: i64 = 0x5a435253;
+
 pub fn check_schema(conn: &Connection) -> Result<(), StoreError> {
+    let application_id: i64 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
     for (table, marker) in [("accounts", "user_id"), ("settings", "updated_at")] {
         let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
         let columns = stmt.query_map([], |r| r.get::<_, String>(1))?;
         for column in columns {
-            if column? == marker {
+            if column? == marker && !(table == "accounts" && application_id == RUST_APPLICATION_ID)
+            {
                 return Err(StoreError::UnsupportedSchema);
             }
         }
@@ -58,6 +62,21 @@ pub fn has_ciphertext(conn: &Connection) -> Result<bool, StoreError> {
     ] {
         let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if exists && conn.query_row(query, [], |r| r.get::<_, bool>(0))? { return Ok(true); }
+        if exists && table == "accounts" {
+            let mut stmt = conn.prepare("PRAGMA table_info(accounts)")?;
+            let columns = stmt.query_map([], |r| r.get::<_, String>(1))?;
+            for column in columns {
+                let column = column?;
+                if matches!(column.as_str(), "access_token" | "refresh_token" | "user_info" | "creds_raw")
+                    && conn.query_row(
+                        &format!("SELECT EXISTS(SELECT 1 FROM accounts WHERE substr({column},1,7) = 'vault1:')"),
+                        [], |r| r.get::<_, bool>(0),
+                    )?
+                {
+                    return Ok(true);
+                }
+            }
+        }
     }
     Ok(false)
 }
@@ -82,6 +101,8 @@ fn migrate(conn: &Connection) {
 }
 
 fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
+    let tx = conn.unchecked_transaction()?;
+    let conn = &tx;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -126,16 +147,33 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
     )?;
     let mut stmt = conn.prepare("PRAGMA table_info(accounts)")?;
     let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    let mut has_remark = false;
-    for column in columns {
-        has_remark |= column? == "remark";
+    let columns = columns.collect::<Result<Vec<_>, _>>()?;
+    for (name, definition) in [
+        ("remark", "TEXT NOT NULL DEFAULT ''"),
+        ("user_id", "TEXT"),
+        ("display_name", "TEXT NOT NULL DEFAULT ''"),
+        ("auth_type", "TEXT NOT NULL DEFAULT 'jwt'"),
+        ("access_token", "TEXT NOT NULL DEFAULT ''"),
+        ("refresh_token", "TEXT NOT NULL DEFAULT ''"),
+        ("user_info", "TEXT NOT NULL DEFAULT ''"),
+        ("device_mid", "TEXT NOT NULL DEFAULT ''"),
+        ("creds_raw", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        if !columns.iter().any(|column| column == name) {
+            conn.execute(
+                &format!("ALTER TABLE accounts ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
     }
-    if !has_remark {
-        conn.execute(
-            "ALTER TABLE accounts ADD COLUMN remark TEXT NOT NULL DEFAULT ''",
-            [],
-        )?;
-    }
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS accounts_user_id ON accounts(user_id);
+        UPDATE accounts SET user_id = 'rust:' || lower(hex(randomblob(16)))
+        WHERE user_id IS NULL OR user_id = ''; ",
+    )?;
+    conn.pragma_update(None, "application_id", RUST_APPLICATION_ID)?;
+    drop(stmt);
+    tx.commit()?;
     Ok(())
 }
 
@@ -245,8 +283,8 @@ fn insert_account(
     conn.execute(
         "INSERT INTO accounts(email, provider, enabled, status, cooling_until,
             paid_cooling_until, paid_fallback, zcode_jwt, api_key, account_group,
-            remaining, priority)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            remaining, priority, user_id)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'rust:' || lower(hex(randomblob(16))))",
         rusqlite::params![
             a.email,
             a.provider,
@@ -280,6 +318,8 @@ pub fn load_accounts(
     conn: &Connection,
     vault: &crate::vault::Vault,
 ) -> Result<Vec<(zcode_core::AccountView, String, String)>, StoreError> {
+    // Validate every credential column at startup, including metadata not in AccountView.
+    load_bundle_accounts(conn, vault)?;
     let mut rows = read_accounts(conn)?;
     for (account, jwt, key) in &mut rows {
         *jwt = vault.decrypt(jwt)?;
@@ -321,6 +361,97 @@ fn read_accounts(
     })?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(StoreError::from)
+}
+
+pub fn load_bundle_accounts(
+    conn: &Connection,
+    vault: &crate::vault::Vault,
+) -> Result<Vec<(i64, crate::account_bundle::BundleAccount)>, StoreError> {
+    use crate::account_bundle::BundleAccount;
+    let mut stmt = conn.prepare(
+        "SELECT id,user_id,email,display_name,provider,auth_type,access_token,refresh_token,
+            zcode_jwt,api_key,user_info,device_mid,creds_raw,account_group,remark
+         FROM accounts ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get(0)?,
+            BundleAccount {
+                user_id: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                email: r.get(2)?,
+                display_name: r.get(3)?,
+                provider: r.get(4)?,
+                auth_type: r.get(5)?,
+                access_token: r.get(6)?,
+                refresh_token: r.get(7)?,
+                zcode_jwt: r.get(8)?,
+                api_key: r.get(9)?,
+                user_info: r.get(10)?,
+                device_mid: r.get(11)?,
+                creds_raw: r.get(12)?,
+                account_group: r.get(13)?,
+                remark: r.get(14)?,
+            },
+        ))
+    })?;
+    let mut accounts = rows.collect::<Result<Vec<_>, _>>()?;
+    for (_, account) in &mut accounts {
+        account.transform_credentials(|value| vault.decrypt(value))?;
+    }
+    Ok(accounts)
+}
+
+/// Credentials are encrypted before entering this transaction. All fallible reads
+/// finish before commit so callers can publish the returned runtime snapshot atomically.
+pub fn import_bundle_accounts(
+    conn: &mut Connection,
+    vault: &crate::vault::Vault,
+    accounts: &[crate::account_bundle::BundleAccount],
+) -> Result<Vec<(zcode_core::AccountView, String, String)>, StoreError> {
+    let tx = conn.transaction()?;
+    for a in accounts {
+        tx.execute(
+            "INSERT INTO accounts(user_id,email,display_name,provider,auth_type,
+                access_token,refresh_token,zcode_jwt,api_key,user_info,device_mid,creds_raw,
+                account_group,remark,status,enabled,priority,paid_fallback)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'active',1,100,?15)
+             ON CONFLICT(user_id) DO UPDATE SET
+                email=COALESCE(NULLIF(excluded.email,''),accounts.email),
+                display_name=COALESCE(NULLIF(excluded.display_name,''),accounts.display_name),
+                provider=excluded.provider,auth_type=excluded.auth_type,
+                access_token=COALESCE(NULLIF(excluded.access_token,''),accounts.access_token),
+                refresh_token=COALESCE(NULLIF(excluded.refresh_token,''),accounts.refresh_token),
+                zcode_jwt=COALESCE(NULLIF(excluded.zcode_jwt,''),accounts.zcode_jwt),
+                api_key=COALESCE(NULLIF(excluded.api_key,''),accounts.api_key),
+                user_info=COALESCE(NULLIF(excluded.user_info,''),accounts.user_info),
+                device_mid=COALESCE(NULLIF(excluded.device_mid,''),accounts.device_mid),
+                creds_raw=COALESCE(NULLIF(excluded.creds_raw,''),accounts.creds_raw),
+                account_group=COALESCE(NULLIF(excluded.account_group,''),accounts.account_group),
+                remark=COALESCE(NULLIF(excluded.remark,''),accounts.remark),
+                status=CASE WHEN accounts.status='disabled' THEN accounts.status ELSE 'active' END,
+                enabled=1",
+            rusqlite::params![
+                a.user_id,
+                a.email,
+                a.display_name,
+                a.provider,
+                a.auth_type,
+                a.access_token,
+                a.refresh_token,
+                a.zcode_jwt,
+                a.api_key,
+                a.user_info,
+                a.device_mid,
+                a.creds_raw,
+                a.account_group,
+                a.remark,
+                !a.api_key.is_empty()
+            ],
+        )?;
+    }
+    let rows = load_accounts(&tx, vault)?;
+    tx.commit()?;
+    Ok(rows)
 }
 
 pub fn delete_account(conn: &Connection, id: i64) {

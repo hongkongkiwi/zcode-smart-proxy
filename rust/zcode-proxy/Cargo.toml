@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 aes-gcm = "0.10"
 base64 = "0.22"
+pbkdf2 = "0.12.2"
 axum = "0.7"
 futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream"] }

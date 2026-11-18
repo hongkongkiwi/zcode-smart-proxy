@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 218 tests across 28 suites, and strict Clippy
+The current workspace run passes 226 tests across 30 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -54,8 +54,13 @@ fixtures. These checks do not establish Go feature parity.
    Stop every source writer before import. A forcibly terminated import can
    leave a private `.zcode-import-*` directory; inspect it and confirm no import
    is running before removing it. Normal startup still refuses Go databases.
-2. Account import/export, OAuth, credential refresh, and quota refresh. Metadata
-   updates now cover group, remark, enabled state, priority, and paid fallback.
+2. OAuth, local/paste credential import, credential refresh, and quota refresh.
+   Encrypted account bundle export/import now supports Go's current and legacy
+   `zcb1:` formats, stable account identities, all bundle metadata, and atomic
+   import rollback. Export requires password step-up and checks every stored
+   credential, including unselected accounts. The offline database importer
+   still projects only its earlier account subset; full metadata projection is
+   separate work.
 3. Remaining admin step-up surfaces, named-key management, and passkeys. TOTP
    confirmation now requires the current password and a pending setup less than
    ten minutes old. Confirmation and disable have separate peer/action throttles;
