@@ -189,7 +189,7 @@ fn integrity(db: &Connection) -> Result<(), ImportError> {
 
 fn validate_go_schema(db: &Connection) -> Result<(), ImportError> {
     for (table, columns) in [
-        ("accounts", "id,user_id,email,provider,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority,access_token,refresh_token,user_info,creds_raw"),
+        ("accounts", "id,user_id,email,display_name,provider,auth_type,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority,access_token,refresh_token,user_info,device_mid,creds_raw,remark"),
         ("settings", "key,value,updated_at"),
         ("gateway_keys", "id,name,key_hash,enabled,models,rpm_limit,rate_5h,rate_1d,rate_7d,quota_total,quota_used"),
         ("proxy_nodes", "password"),
@@ -230,17 +230,21 @@ fn project(
     runtime_vault: &Vault,
 ) -> Result<(), ImportError> {
     let tx = runtime.transaction()?;
-    let mut stmt = source.prepare("SELECT id,email,provider,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority FROM accounts")?;
+    let mut stmt = source.prepare("SELECT id,email,provider,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority,user_id,display_name,auth_type,access_token,refresh_token,user_info,device_mid,creds_raw,remark FROM accounts")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let jwt = Zeroizing::new(source_vault.decrypt(&r.get::<_, String>(8)?)?);
         let key = Zeroizing::new(source_vault.decrypt(&r.get::<_, String>(9)?)?);
+        let access = Zeroizing::new(source_vault.decrypt(&r.get::<_, String>(16)?)?);
+        let refresh = Zeroizing::new(source_vault.decrypt(&r.get::<_, String>(17)?)?);
+        let user_info = Zeroizing::new(source_vault.decrypt(&r.get::<_, String>(18)?)?);
+        let creds_raw = Zeroizing::new(source_vault.decrypt(&r.get::<_, String>(20)?)?);
         let remaining: f64 = r.get(11)?;
         if !remaining.is_finite() {
             return Err(ImportError);
         }
-        tx.execute("INSERT INTO accounts(id,email,provider,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)", params![
-            r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, boolean(r,3)?, r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, boolean(r,7)?, runtime_vault.encrypt(&jwt)?, runtime_vault.encrypt(&key)?, r.get::<_, String>(10)?, remaining, r.get::<_, i64>(12)?
+        tx.execute("INSERT INTO accounts(id,email,provider,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority,user_id,display_name,auth_type,access_token,refresh_token,user_info,device_mid,creds_raw,remark) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)", params![
+            r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, boolean(r,3)?, r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, boolean(r,7)?, runtime_vault.encrypt(&jwt)?, runtime_vault.encrypt(&key)?, r.get::<_, String>(10)?, remaining, r.get::<_, i64>(12)?, r.get::<_, String>(13)?, r.get::<_, String>(14)?, r.get::<_, String>(15)?, runtime_vault.encrypt(&access)?, runtime_vault.encrypt(&refresh)?, runtime_vault.encrypt(&user_info)?, r.get::<_, String>(19)?, runtime_vault.encrypt(&creds_raw)?, r.get::<_, String>(21)?
         ])?;
     }
     let mut stmt = source.prepare("SELECT id,name,key_hash,enabled,models,rpm_limit,rate_5h,rate_1d,rate_7d,quota_total,quota_used FROM gateway_keys")?;
