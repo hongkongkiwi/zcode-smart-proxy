@@ -157,6 +157,27 @@ pub async fn handle_refresh(
         let Some(account) = accounts.iter().find(|a| a.id == id) else {
             return error(StatusCode::NOT_FOUND, "account not found");
         };
+        let exists = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
+            [id],
+            |row| row.get::<_, bool>(0),
+        );
+        match exists {
+            Ok(false) => return error(StatusCode::NOT_FOUND, "account not found"),
+            Err(_) => {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "storage operation failed",
+                )
+            }
+            Ok(true) => {}
+        }
+        if crate::identity::ensure_locked(&db, id).is_err() {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage operation failed",
+            );
+        }
         match db.query_row(
             "SELECT device_mid,refresh_token FROM accounts WHERE id=?1",
             [id],

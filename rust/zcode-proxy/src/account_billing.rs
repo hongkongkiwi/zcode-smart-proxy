@@ -74,6 +74,27 @@ pub(crate) fn load_account(state: &AppState, id: i64) -> Result<Account, Account
         .iter()
         .find(|a| a.id == id)
         .ok_or(AccountError(StatusCode::NOT_FOUND, "account not found"))?;
+    let exists = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
+            [id],
+            |r| r.get::<_, bool>(0),
+        )
+        .map_err(|_| {
+            AccountError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage operation failed",
+            )
+        })?;
+    if !exists {
+        return Err(AccountError(StatusCode::NOT_FOUND, "account not found"));
+    }
+    crate::identity::ensure_locked(&db, id).map_err(|_| {
+        AccountError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage operation failed",
+        )
+    })?;
     let (mid, info, access, remark, stored_id) = db
         .query_row(
             "SELECT device_mid,user_info,access_token,remark,COALESCE(user_id,'') FROM accounts WHERE id=?1",

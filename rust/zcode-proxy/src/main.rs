@@ -40,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vault = zcode_proxy::vault::Vault::for_database(&db_path)?;
     let db = zcode_proxy::store::try_open(&db_path)?;
     let state = AppState::try_from_db_with_vault(root_key, upstream, db, vault)?;
+    zcode_proxy::identity::backfill_device_identities(&state)?;
     // The bootstrap environment must not overwrite a rotated stored password.
     if state.setting("admin_password_hash").is_none() {
         if let Ok(pw) = std::env::var("ZCODE_RS_ADMIN_PASSWORD") {

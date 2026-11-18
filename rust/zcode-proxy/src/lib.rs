@@ -16,6 +16,7 @@ pub mod engine;
 pub mod gateway_admin;
 pub mod go_compat;
 pub mod go_import;
+pub mod identity;
 pub mod openai_routes;
 mod openai_stream;
 mod plan_admin;
