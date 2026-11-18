@@ -78,6 +78,25 @@ impl Default for OAuthUrls {
 }
 
 #[derive(Clone)]
+pub struct PollOAuthUrls {
+    pub init: String,
+    pub poll_base: String,
+    pub interval_override: Option<std::time::Duration>,
+    pub flow_ttl: std::time::Duration,
+}
+
+impl Default for PollOAuthUrls {
+    fn default() -> Self {
+        Self {
+            init: "https://zcode.z.ai/api/v1/oauth/cli/init".into(),
+            poll_base: "https://zcode.z.ai/api/v1/oauth/cli/poll".into(),
+            interval_override: None,
+            flow_ttl: std::time::Duration::from_secs(300),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Creds {
     pub zcode_jwt: String,
     pub api_key: String,
@@ -104,6 +123,7 @@ pub struct AppState {
     pub upstream: UpstreamUrls,
     pub management: ManagementUrls,
     pub oauth: OAuthUrls,
+    pub oauth_poll: PollOAuthUrls,
     pub(crate) oauth_flows: Mutex<crate::account_oauth::FlowStore>,
     pub(crate) quota_refresh_inflight: Mutex<std::collections::HashSet<i64>>,
     pub(crate) token_refresh_attempts: Mutex<HashMap<i64, std::time::Instant>>,
@@ -198,6 +218,7 @@ impl AppState {
             upstream,
             management: ManagementUrls::default(),
             oauth: OAuthUrls::default(),
+            oauth_poll: PollOAuthUrls::default(),
             oauth_flows: Mutex::new(crate::account_oauth::FlowStore::default()),
             quota_refresh_inflight: Mutex::new(std::collections::HashSet::new()),
             token_refresh_attempts: Mutex::new(HashMap::new()),

@@ -428,6 +428,19 @@ pub(crate) fn import_bundle_accounts_with_ids(
     vault: &crate::vault::Vault,
     accounts: &[crate::account_bundle::BundleAccount],
 ) -> Result<ImportResult, StoreError> {
+    import_bundle_accounts_before(conn, vault, accounts, None)
+}
+
+pub(crate) fn import_bundle_accounts_before(
+    conn: &mut Connection,
+    vault: &crate::vault::Vault,
+    accounts: &[crate::account_bundle::BundleAccount],
+    deadline: Option<std::time::Instant>,
+) -> Result<ImportResult, StoreError> {
+    let expired = || deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline);
+    if expired() {
+        return Err(StoreError::Database);
+    }
     let tx = conn.transaction()?;
     let mut ids = Vec::with_capacity(accounts.len());
     for a in accounts {
@@ -476,6 +489,10 @@ pub(crate) fn import_bundle_accounts_with_ids(
         )?);
     }
     let rows = load_accounts(&tx, vault)?;
+    // Expiry rolls back writes and snapshot reads before admitting the commit.
+    if expired() {
+        return Err(StoreError::Database);
+    }
     tx.commit()?;
     Ok(ImportResult {
         accounts: rows,

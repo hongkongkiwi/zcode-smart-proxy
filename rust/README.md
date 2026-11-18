@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 261 tests across 41 suites, and strict Clippy
+The current workspace run passes 267 tests across 43 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -54,9 +54,10 @@ fixtures. These checks do not establish Go feature parity.
    Stop every source writer before import. A forcibly terminated import can
    leave a private `.zcode-import-*` directory; inspect it and confirm no import
    is running before removing it. Normal startup still refuses Go databases.
-2. OAuth poll mode and local credential import. Manual and public-callback OAuth
-   enrollment now exchange authorization codes, retrieve identity and API-key
-   metadata, and persist encrypted accounts. Flows have strict expiry, replay
+2. Local credential import and background account lifecycle. Manual,
+   public-callback, and polling OAuth enrollment retrieve identity and API-key
+   metadata and persist encrypted accounts. Poll workers have bounded retry,
+   expiry, cancellation, and deadline-aware storage admission. Flows have strict expiry, replay
    protection, bounded retries, and redirect refusal. OAuth wire tests pin Go's
    source contract, not live-provider acceptance. Manual quota refresh uses JWT
    billing and raw API-key monitor endpoints, with bounded requests, client

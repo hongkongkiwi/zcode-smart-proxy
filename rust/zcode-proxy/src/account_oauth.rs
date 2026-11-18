@@ -1,4 +1,4 @@
-//! Authorization-code login only. Poll login and background quota/install work are deferred.
+//! Authorization-code and bounded poll login. Background quota/install work is deferred.
 
 use std::{
     collections::HashMap,
@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     account_bundle::BundleAccount,
-    state::{AppState, Creds},
+    state::{AppState, Creds, OAuthUrls},
     store,
 };
 
@@ -43,7 +43,9 @@ struct Flow {
     account_id: i64,
     email: String,
     #[serde(skip)]
-    created: Instant,
+    deadline: Instant,
+    #[serde(skip)]
+    poll: bool,
     #[serde(skip)]
     attempts: u8,
 }
@@ -51,12 +53,30 @@ struct Flow {
 #[derive(Default)]
 pub(crate) struct FlowStore {
     flows: HashMap<String, Flow>,
+    workers: HashMap<String, tokio::task::AbortHandle>,
 }
 
 impl FlowStore {
     // Unlike Go's start-only cleanup, every capability use enforces the strict TTL.
-    fn cleanup(&mut self, ttl: Duration) {
-        self.flows.retain(|_, flow| flow.created.elapsed() < ttl);
+    fn cleanup(&mut self) {
+        let now = Instant::now();
+        self.flows.retain(|_, flow| now < flow.deadline);
+        self.workers.retain(|key, worker| {
+            if self.flows.contains_key(key) {
+                true
+            } else {
+                worker.abort();
+                false
+            }
+        });
+    }
+}
+
+impl Drop for FlowStore {
+    fn drop(&mut self) {
+        for worker in self.workers.values() {
+            worker.abort();
+        }
     }
 }
 
@@ -124,7 +144,7 @@ pub async fn handle_start(State(state): State<Arc<AppState>>, request: Request) 
         }
     };
     if request.poll {
-        return error(StatusCode::BAD_REQUEST, "poll login is not supported");
+        return start_poll(state, request.group).await;
     }
     let nonce = match nonce() {
         Ok(nonce) => nonce,
@@ -154,7 +174,7 @@ pub async fn handle_start(State(state): State<Arc<AppState>>, request: Request) 
         .append_pair("client_id", CLIENT_ID)
         .append_pair("state", &capability);
     let mut flows = state.oauth_flows.lock().unwrap();
-    flows.cleanup(state.oauth.flow_ttl);
+    flows.cleanup();
     if flows.flows.len() >= MAX_FLOWS {
         return error(
             StatusCode::TOO_MANY_REQUESTS,
@@ -173,12 +193,205 @@ pub async fn handle_start(State(state): State<Arc<AppState>>, request: Request) 
             message: "",
             account_id: 0,
             email: String::new(),
-            created: Instant::now(),
+            deadline: Instant::now() + state.oauth.flow_ttl,
+            poll: false,
             attempts: 0,
         },
     );
     Json(json!({"state":capability,"authorize_url":authorize.as_str(),"manual":request.manual}))
         .into_response()
+}
+
+async fn start_poll(state: Arc<AppState>, group: String) -> Response {
+    {
+        let mut flows = state.oauth_flows.lock().unwrap();
+        flows.cleanup();
+        if flows.flows.len() >= MAX_FLOWS {
+            return error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many login flows; try later",
+            );
+        }
+    }
+    let mut bytes = [0u8; 32];
+    if OsRng.try_fill_bytes(&mut bytes).is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot generate poll token",
+        );
+    }
+    let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let client = match Client::new() {
+        Ok(client) => client,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let init = async {
+        client
+            .request(
+                reqwest::Method::POST,
+                url(&state.oauth_poll.init)?,
+                &token,
+                Some(json!({"provider":"zai"})),
+            )
+            .await
+    };
+    let response = match tokio::time::timeout(Duration::from_secs(15), init).await {
+        Ok(Ok(response)) => response,
+        _ => return error(StatusCode::BAD_GATEWAY, "poll initialization failed"),
+    };
+    let parsed = (|| {
+        let data = poll_envelope(&response)?;
+        let flow_id = text(data, &["flow_id"]);
+        if flow_id.is_empty() || flow_id == "." || flow_id == ".." {
+            return Err("invalid poll flow identifier");
+        }
+        let mut authorize = url(text(data, &["authorize_url"]))?;
+        if authorize.scheme() != "https" {
+            return Err("invalid poll authorization URL");
+        }
+        let integer = |name: &str| {
+            data.get(name)
+                .and_then(|value| {
+                    value.as_i64().or_else(|| {
+                        value
+                            .as_f64()
+                            .filter(|number| number.is_finite())
+                            .map(|number| number as i64)
+                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                    })
+                })
+                .unwrap_or(0)
+        };
+        let expires_at = integer("expires_at");
+        let seconds = integer("poll_interval_sec");
+        let seconds = if seconds < 1 { 2 } else { seconds.min(15) };
+        let interval = state
+            .oauth_poll
+            .interval_override
+            .unwrap_or(Duration::from_secs(seconds as u64));
+        if interval.is_zero() {
+            return Err("invalid poll interval");
+        }
+        let mut interstitial = url("https://zcode.z.ai/app/oauth/login")?;
+        interstitial
+            .query_pairs_mut()
+            .append_pair("redirect", "zcode://oauth/callback")
+            .append_pair("app_version", &state.management.app_version);
+        let query: Vec<_> = authorize
+            .query_pairs()
+            .into_owned()
+            .filter(|(key, _)| key != "redirect_uri")
+            .collect();
+        authorize
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(query)
+            .append_pair("redirect_uri", interstitial.as_str());
+        let mut target = url(&state.oauth_poll.poll_base)?;
+        if target.query().is_some() {
+            return Err("invalid poll endpoint");
+        }
+        target
+            .path_segments_mut()
+            .map_err(|_| "invalid poll endpoint")?
+            .pop_if_empty()
+            .push(flow_id);
+        Ok((flow_id.to_owned(), authorize, expires_at, interval, target))
+    })();
+    let (flow_id, authorize, expires_at, interval, target) = match parsed {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return error(
+                StatusCode::BAD_GATEWAY,
+                "invalid poll initialization response",
+            )
+        }
+    };
+    // Go starts the flow budget after cli/init; initialization has its own HTTP bound.
+    let deadline = Instant::now() + state.oauth_poll.flow_ttl.min(Duration::from_secs(300));
+    let deadline = if expires_at > 0 {
+        let now = Instant::now();
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let remaining = Duration::from_secs(expires_at as u64).saturating_sub(wall);
+        now + remaining.min(deadline.saturating_duration_since(now))
+    } else {
+        deadline
+    };
+    let flow = Flow {
+        state: flow_id.clone(),
+        redirect_uri: String::new(),
+        manual: false,
+        group,
+        created_at: crate::auth::now_secs(),
+        status: "pending",
+        message: "",
+        account_id: 0,
+        email: String::new(),
+        deadline,
+        poll: true,
+        attempts: 0,
+    };
+    let mut flows = state.oauth_flows.lock().unwrap();
+    flows.cleanup();
+    if flows.flows.len() >= MAX_FLOWS {
+        return error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many login flows; try later",
+        );
+    }
+    // Never overwrite an existing one-use capability, including completed flows.
+    if flows.flows.contains_key(&flow_id) {
+        return error(StatusCode::BAD_GATEWAY, "duplicate poll flow identifier");
+    }
+    flows.flows.insert(flow_id.clone(), flow.clone());
+    let weak = Arc::downgrade(&state);
+    let oauth = state.oauth.clone();
+    let worker = tokio::spawn(async move {
+        let work = async {
+            loop {
+                if Instant::now() >= deadline {
+                    return Err("poll authorization expired");
+                }
+                match client.poll(target.clone(), &token).await? {
+                    Some(data) => return ingest_tokens(&client, &oauth, &flow, &data).await,
+                    None => tokio::time::sleep(interval).await,
+                }
+            }
+        };
+        let result = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work).await;
+        // All HTTP and enrichment use copied configuration, never a strong application owner.
+        if let Some(state) = weak.upgrade() {
+            let result = match result {
+                Ok(Ok(account)) if Instant::now() < deadline => {
+                    publish_account(&state, &flow, account)
+                }
+                _ => Err("poll authorization failed or expired"),
+            };
+            let mut flows = state.oauth_flows.lock().unwrap();
+            flows.workers.remove(&flow.state);
+            if result.is_err() {
+                if let Some(current) = flows.flows.get_mut(&flow.state) {
+                    current.status = "failed";
+                    current.message = "poll authorization failed or expired";
+                }
+            }
+        }
+    });
+    flows.workers.insert(flow_id.clone(), worker.abort_handle());
+    Json(json!({"state":flow_id,"authorize_url":authorize.as_str(),"manual":false,"poll":true}))
+        .into_response()
+}
+
+fn poll_envelope(response: &Value) -> Result<&Value, &'static str> {
+    if response.get("code").and_then(Value::as_f64) != Some(0.0) {
+        return Err("poll upstream rejected the request");
+    }
+    response
+        .get("data")
+        .filter(|data| data.is_object())
+        .ok_or("invalid poll response")
 }
 
 #[derive(Deserialize)]
@@ -191,7 +404,7 @@ pub async fn handle_status(
     Query(query): Query<FlowQuery>,
 ) -> Response {
     let mut flows = state.oauth_flows.lock().unwrap();
-    flows.cleanup(state.oauth.flow_ttl);
+    flows.cleanup();
     match flows.flows.get(&query.state) {
         Some(flow) => Json(json!(flow)).into_response(),
         None => error(
@@ -244,11 +457,14 @@ fn manual_code(raw: &str, state: &str) -> Result<String, &'static str> {
 
 fn begin(state: &AppState, capability: &str) -> Result<Flow, &'static str> {
     let mut flows = state.oauth_flows.lock().unwrap();
-    flows.cleanup(state.oauth.flow_ttl);
+    flows.cleanup();
     let flow = flows
         .flows
         .get_mut(capability)
         .ok_or("login flow does not exist or has expired")?;
+    if flow.poll {
+        return Err("poll login does not accept authorization codes");
+    }
     match flow.status {
         "ready" => return Err("login flow is already complete"),
         "exchanging" => return Err("login flow is exchanging"),
@@ -271,7 +487,7 @@ struct ExchangeGuard<'a> {
 impl Drop for ExchangeGuard<'_> {
     fn drop(&mut self) {
         let mut flows = self.state.oauth_flows.lock().unwrap();
-        flows.cleanup(self.state.oauth.flow_ttl);
+        flows.cleanup();
         if let Some(flow) = flows.flows.get_mut(self.capability) {
             if flow.status == "exchanging" {
                 flow.status = "failed";
@@ -318,12 +534,15 @@ pub async fn handle_callback(
 ) -> Response {
     {
         let mut flows = state.oauth_flows.lock().unwrap();
-        flows.cleanup(state.oauth.flow_ttl);
+        flows.cleanup();
         let Some(flow) = flows.flows.get_mut(&query.state) else {
             return html(
                 "Login flow does not exist or has expired. Start again in the admin panel.",
             );
         };
+        if flow.poll {
+            return html("Poll login does not accept callbacks. Return to the admin panel.");
+        }
         if flow.status == "ready" {
             return html("Authorization is already complete. Return to the admin panel.");
         }
@@ -355,27 +574,40 @@ async fn complete(state: &AppState, flow: &Flow, code: &str) -> Result<(), &'sta
         state,
         capability: &flow.state,
     };
-    let mut account = tokio::time::timeout(Duration::from_secs(90), exchange(state, flow, code))
+    let account = tokio::time::timeout(Duration::from_secs(90), exchange(state, flow, code))
         .await
         .map_err(|_| "authorization exchange timed out")??;
+    publish_account(state, flow, account)
+}
+
+fn publish_account(
+    state: &AppState,
+    flow: &Flow,
+    mut account: BundleAccount,
+) -> Result<(), &'static str> {
     account
         .transform_credentials(|value| state.vault.encrypt(value))
         .map_err(|_| "credential storage operation failed")?;
     // Lock order is flow, DB, accounts, creds; no flow lock is held during HTTP.
     let mut flows = state.oauth_flows.lock().unwrap();
-    flows.cleanup(state.oauth.flow_ttl);
+    flows.cleanup();
     let current = flows
         .flows
         .get_mut(&flow.state)
         .ok_or("login flow has expired")?;
-    if current.status != "exchanging" {
-        return Err("login flow is no longer exchanging");
+    if current.status != if flow.poll { "pending" } else { "exchanging" } {
+        return Err("login flow is no longer accepting credentials");
     }
     let mut db = state.db.lock().unwrap();
     let mut accounts = state.accounts.lock().unwrap();
     let mut creds = state.creds.lock().unwrap();
-    let result = store::import_bundle_accounts_with_ids(&mut db, &state.vault, &[account])
-        .map_err(|_| "account storage operation failed")?;
+    let result = store::import_bundle_accounts_before(
+        &mut db,
+        &state.vault,
+        &[account],
+        Some(flow.deadline),
+    )
+    .map_err(|_| "account storage operation failed")?;
     let id = result.ids[0];
     let mut email = String::new();
     for (account, jwt, key) in result.accounts {
@@ -457,13 +689,45 @@ impl Client {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let mut response = request
+        let response = request
             .send()
             .await
             .map_err(|_| "OAuth upstream request failed")?;
         if !response.status().is_success() {
             return Err("OAuth upstream rejected the request");
         }
+        Self::body(response).await
+    }
+
+    async fn poll(
+        &self,
+        target: reqwest::Url,
+        bearer: &str,
+    ) -> Result<Option<Value>, &'static str> {
+        let response = match self.0.get(target).bearer_auth(bearer).send().await {
+            Ok(response) => response,
+            Err(_) => return Ok(None),
+        };
+        let status = response.status();
+        if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err("poll upstream rejected the request");
+        }
+        let response = match Self::body(response).await {
+            Err("OAuth upstream response failed") => return Ok(None),
+            result => result?,
+        };
+        let data = poll_envelope(&response)?;
+        match text(data, &["status"]) {
+            "pending" => Ok(None),
+            "ready" if !text(data, &["token"]).is_empty() => Ok(Some(data.clone())),
+            _ => Err("invalid poll authorization result"),
+        }
+    }
+
+    async fn body(mut response: reqwest::Response) -> Result<Value, &'static str> {
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
@@ -502,7 +766,15 @@ async fn exchange(
             return Err("OAuth upstream rejected the request");
         }
     }
-    let data = &response["data"];
+    ingest_tokens(&client, &state.oauth, flow, &response["data"]).await
+}
+
+async fn ingest_tokens(
+    client: &Client,
+    oauth: &OAuthUrls,
+    flow: &Flow,
+    data: &Value,
+) -> Result<BundleAccount, &'static str> {
     let jwt = text(data, &["token"]);
     if jwt.is_empty() {
         return Err("OAuth response is missing the Coding Plan token");
@@ -518,7 +790,7 @@ async fn exchange(
         && text(&user, &["user_id"]).is_empty()
         && !access.is_empty()
     {
-        if let Ok(info) = client.get(url(&state.oauth.userinfo)?, access).await {
+        if let Ok(info) = client.get(url(&oauth.userinfo)?, access).await {
             if info["data"].is_object() {
                 user = info["data"].clone();
             }
@@ -543,7 +815,7 @@ async fn exchange(
     let api_key = if access.is_empty() {
         String::new()
     } else {
-        api_key(&client, state, access).await.unwrap_or_default()
+        api_key(client, oauth, access).await.unwrap_or_default()
     };
     let mut name = text(
         &user,
@@ -587,11 +859,11 @@ fn identifier(value: &Value) -> Result<String, &'static str> {
     }
 }
 
-async fn api_key(client: &Client, state: &AppState, access: &str) -> Result<String, &'static str> {
+async fn api_key(client: &Client, oauth: &OAuthUrls, access: &str) -> Result<String, &'static str> {
     let login = client
         .request(
             reqwest::Method::POST,
-            url(&state.oauth.business_login)?,
+            url(&oauth.business_login)?,
             "",
             Some(json!({"token":access})),
         )
@@ -600,9 +872,7 @@ async fn api_key(client: &Client, state: &AppState, access: &str) -> Result<Stri
     if business.is_empty() {
         return Err("missing business token");
     }
-    let customer = client
-        .get(url(&state.oauth.customer_info)?, business)
-        .await?;
+    let customer = client.get(url(&oauth.customer_info)?, business).await?;
     let orgs = customer["data"]["organizations"]
         .as_array()
         .ok_or("missing organizations")?;
@@ -617,7 +887,7 @@ async fn api_key(client: &Client, state: &AppState, access: &str) -> Result<Stri
         .find(|project| text(project, &["projectName"]).contains("默认项目"))
         .or_else(|| projects.first())
         .ok_or("missing project")?;
-    let mut keys_url = url(&state.oauth.project_keys_base)?;
+    let mut keys_url = url(&oauth.project_keys_base)?;
     keys_url
         .path_segments_mut()
         .map_err(|_| "invalid project key endpoint")?
