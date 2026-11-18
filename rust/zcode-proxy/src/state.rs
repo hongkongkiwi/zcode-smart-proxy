@@ -30,6 +30,27 @@ pub struct UpstreamUrls {
 }
 
 #[derive(Clone)]
+pub struct ManagementUrls {
+    pub billing_base: String,
+    pub quota_limit: String,
+    pub subscription: String,
+    pub oauth_token: String,
+    pub app_version: String,
+}
+
+impl Default for ManagementUrls {
+    fn default() -> Self {
+        Self {
+            billing_base: "https://zcode.z.ai/api/v1/zcode-plan".into(),
+            quota_limit: "https://api.z.ai/api/monitor/usage/quota/limit".into(),
+            subscription: "https://api.z.ai/api/biz/subscription/list".into(),
+            oauth_token: "https://zcode.z.ai/api/v1/oauth/token".into(),
+            app_version: "3.14.4".into(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Creds {
     pub zcode_jwt: String,
     pub api_key: String,
@@ -54,6 +75,8 @@ pub struct AppState {
     /// Root key plaintext (empty = named keys only).
     pub root_key: String,
     pub upstream: UpstreamUrls,
+    pub management: ManagementUrls,
+    pub(crate) quota_refresh_inflight: Mutex<std::collections::HashSet<i64>>,
     pub stream_timings: StreamTimings,
     /// SQLite persistence (single connection, Go serialized-writer parity).
     pub db: Mutex<rusqlite::Connection>,
@@ -143,6 +166,8 @@ impl AppState {
         Ok(Self {
             root_key,
             upstream,
+            management: ManagementUrls::default(),
+            quota_refresh_inflight: Mutex::new(std::collections::HashSet::new()),
             stream_timings: StreamTimings::default(),
             db: Mutex::new(db),
             vault,

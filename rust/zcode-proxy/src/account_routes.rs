@@ -225,7 +225,11 @@ pub async fn handle_account_enabled(
     };
     let db = state.db.lock().unwrap();
     match db.execute(
-        "UPDATE accounts SET enabled = ?1 WHERE id = ?2",
+        "UPDATE accounts SET enabled = ?1,
+            status = CASE WHEN ?1 = 0 THEN 'disabled'
+                WHEN ?1 = 1 AND status = 'disabled' THEN 'active'
+                ELSE status END
+         WHERE id = ?2",
         rusqlite::params![enabled as i64, id],
     ) {
         Ok(0) => return err(StatusCode::NOT_FOUND, "account not found"),
@@ -240,6 +244,11 @@ pub async fn handle_account_enabled(
     let mut accounts = state.accounts.lock().unwrap();
     if let Some(a) = accounts.iter_mut().find(|a| a.id == id) {
         a.enabled = enabled;
+        if !enabled {
+            a.status = zcode_core::STATUS_DISABLED.into();
+        } else if a.status == zcode_core::STATUS_DISABLED {
+            a.status = zcode_core::STATUS_ACTIVE.into();
+        }
     }
     (StatusCode::OK, Json(json!({"ok": true}))).into_response()
 }

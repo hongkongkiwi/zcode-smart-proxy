@@ -14,6 +14,8 @@ base64 = "0.22"
 pbkdf2 = "0.12.2"
 axum = "0.7"
 futures-util = "0.3"
+chrono = "0.4"
+iana-time-zone = "0.1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

@@ -158,6 +158,13 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
         ("user_info", "TEXT NOT NULL DEFAULT ''"),
         ("device_mid", "TEXT NOT NULL DEFAULT ''"),
         ("creds_raw", "TEXT NOT NULL DEFAULT ''"),
+        ("quota_json", "TEXT NOT NULL DEFAULT ''"),
+        ("plan_tier", "TEXT NOT NULL DEFAULT ''"),
+        ("plan_expire", "TEXT NOT NULL DEFAULT ''"),
+        ("total_units", "REAL NOT NULL DEFAULT 0"),
+        ("used_units", "REAL NOT NULL DEFAULT 0"),
+        ("last_checked_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_error", "TEXT NOT NULL DEFAULT ''"),
     ] {
         if !columns.iter().any(|column| column == name) {
             conn.execute(
@@ -474,6 +481,34 @@ pub(crate) fn import_bundle_accounts_with_ids(
         accounts: rows,
         ids,
     })
+}
+
+pub(crate) fn account_public_view(
+    conn: &Connection,
+    account: &zcode_core::AccountView,
+) -> rusqlite::Result<serde_json::Value> {
+    conn.query_row(
+        "SELECT remark,quota_json,plan_tier,plan_expire,total_units,used_units,last_checked_at,last_error
+         FROM accounts WHERE id=?1",
+        [account.id],
+        |row| {
+            let quota: String = row.get(1)?;
+            let quota = serde_json::from_str::<serde_json::Value>(&quota).unwrap_or(serde_json::Value::Null);
+            Ok(serde_json::json!({
+                "id":account.id,"email":account.email,"provider":account.provider,
+                "enabled":account.enabled,
+                "status":zcode_core::effective_status(&account.status, account.cooling_until, crate::auth::now_secs()),
+                "raw_status":account.status,
+                "cooling_until":account.cooling_until,"remaining":account.remaining,
+                "group":account.account_group,"remark":row.get::<_,String>(0)?,
+                "priority":account.priority,"paid_fallback":account.paid_fallback,
+                "quota":quota,"plan_tier":row.get::<_,String>(2)?,
+                "plan_expire":row.get::<_,String>(3)?,"total_units":row.get::<_,f64>(4)?,
+                "used_units":row.get::<_,f64>(5)?,"last_checked_at":row.get::<_,i64>(6)?,
+                "last_error":row.get::<_,String>(7)?,
+            }))
+        },
+    )
 }
 
 pub fn delete_account(conn: &Connection, id: i64) {

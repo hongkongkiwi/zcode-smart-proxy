@@ -3,6 +3,7 @@
 
 pub mod account_bundle;
 pub mod account_paste;
+pub mod account_refresh;
 pub mod account_routes;
 pub mod admin;
 pub mod auth;
@@ -86,6 +87,10 @@ fn admin_api(state: Arc<AppState>) -> Router {
             "/api/accounts/:id",
             axum::routing::delete(crate::account_routes::handle_account_delete)
                 .put(crate::account_routes::handle_account_update),
+        )
+        .route(
+            "/api/accounts/:id/refresh",
+            post(account_refresh::handle_refresh),
         )
         .route(
             "/api/accounts/:id/enabled",
