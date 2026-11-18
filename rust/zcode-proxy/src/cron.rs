@@ -79,6 +79,20 @@ impl Cron {
         })
     }
 
+    pub(crate) fn matches(&self, now: DateTime<Local>) -> bool {
+        let day = self.day.matches(now.day());
+        let weekday = self.weekday.matches(now.weekday().num_days_from_sunday());
+        let day_matches = if !self.day.star && !self.weekday.star {
+            day || weekday
+        } else {
+            day && weekday
+        };
+        self.minute.matches(now.minute())
+            && self.hour.matches(now.hour())
+            && self.month.matches(now.month())
+            && day_matches
+    }
+
     pub(crate) fn next_run(&self, from: DateTime<Local>) -> Option<String> {
         let start = from.with_second(0)?.with_nanosecond(0)? + Duration::minutes(1);
         let limit = start + Duration::days(366);

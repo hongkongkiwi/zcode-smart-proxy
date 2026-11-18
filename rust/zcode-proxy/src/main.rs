@@ -51,14 +51,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let state = Arc::new(state);
 
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    let scheduler = Arc::new(zcode_proxy::scheduler::Scheduler::new(state.clone()));
+    state
+        .set_scheduler(scheduler.clone())
+        .map_err(|_| "scheduler already installed")?;
+    scheduler.start()?;
     let app = build_router(state);
-
-    let listener = tokio::net::TcpListener::bind(&bind).await.unwrap();
+    let (drain, drained) = tokio::sync::oneshot::channel();
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let stopping = scheduler.clone();
+    let signal = async move {
+        #[cfg(unix)]
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result { eprintln!("SIGINT listener failed: {error}"); }
+            }
+            _ = terminate.recv() => ()
+        }
+        #[cfg(not(unix))]
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            eprintln!("SIGINT listener failed: {error}");
+        }
+        let report = stopping.shutdown().await;
+        if !report.tick_stopped || !report.tasks_drained {
+            eprintln!(
+                "scheduler shutdown incomplete: tick_stopped={}, tasks_drained={}, abandoned={:?}",
+                report.tick_stopped, report.tasks_drained, report.abandoned
+            );
+        }
+        let _ = drain.send(());
+    };
     println!("zcode-proxy-rs listening on {bind}");
-    axum::serve(
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .await?;
+    .with_graceful_shutdown(signal);
+    let server = std::future::IntoFuture::into_future(server);
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => {
+            scheduler.shutdown().await;
+            result?;
+        }
+        _ = drained => {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), &mut server).await {
+                Ok(result) => result?,
+                Err(_) => eprintln!("HTTP drain timed out"),
+            }
+        }
+    }
     Ok(())
 }

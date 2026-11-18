@@ -19,6 +19,7 @@ pub mod go_import;
 pub mod openai_routes;
 mod openai_stream;
 mod plan_admin;
+pub mod scheduler;
 pub mod state;
 pub mod store;
 mod streaming;
@@ -85,6 +86,8 @@ fn admin_api(state: Arc<AppState>) -> Router {
             "/api/plans/:id",
             put(plan_admin::handle_update).delete(plan_admin::handle_delete),
         )
+        .route("/api/plans/:id/run", post(scheduler::handle_run))
+        .route("/api/plans/running", get(scheduler::handle_running))
         .route("/api/claim-records", get(plan_admin::handle_claim_records))
         .route("/api/plan-runs", get(plan_admin::handle_plan_runs))
         .route(

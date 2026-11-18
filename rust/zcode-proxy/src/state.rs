@@ -153,6 +153,7 @@ pub struct AppState {
     pub automation: AutomationUrls,
     pub automation_solver: std::sync::Arc<dyn zcode_core::egress::CaptchaSolver>,
     pub(crate) automation_inflight: Mutex<std::collections::HashSet<i64>>,
+    pub(crate) scheduler: Mutex<Option<std::sync::Weak<crate::scheduler::Scheduler>>>,
     pub oauth: OAuthUrls,
     pub oauth_poll: PollOAuthUrls,
     /// An explicit credential file confines local import to it and its siblings.
@@ -206,6 +207,27 @@ impl UsageRecord {
 }
 
 impl AppState {
+    #[allow(clippy::result_unit_err)] // The public slot contract only distinguishes a live occupant.
+    pub fn set_scheduler(
+        &self,
+        scheduler: std::sync::Arc<crate::scheduler::Scheduler>,
+    ) -> Result<(), ()> {
+        let mut slot = self.scheduler.lock().unwrap();
+        if slot.as_ref().and_then(std::sync::Weak::upgrade).is_some() {
+            return Err(());
+        }
+        *slot = Some(std::sync::Arc::downgrade(&scheduler));
+        Ok(())
+    }
+
+    pub fn scheduler(&self) -> Option<std::sync::Arc<crate::scheduler::Scheduler>> {
+        self.scheduler
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     /// Default upstream URLs, overridable via env (service layer wiring).
     pub fn upstream_from_env() -> UpstreamUrls {
         UpstreamUrls {
@@ -257,6 +279,7 @@ impl AppState {
             automation: AutomationUrls::default(),
             automation_solver: std::sync::Arc::new(zcode_core::egress::NoopSolver),
             automation_inflight: Mutex::new(std::collections::HashSet::new()),
+            scheduler: Mutex::new(None),
             oauth: OAuthUrls::default(),
             oauth_poll: PollOAuthUrls::default(),
             local_credentials_path: None,

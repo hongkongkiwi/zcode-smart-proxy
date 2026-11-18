@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 314 tests across 54 suites, and strict Clippy
+The current workspace run passes 325 tests across 55 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -100,12 +100,16 @@ fixtures. These checks do not establish Go feature parity.
    claims and resets commit their audit before optional billing confirmation;
    cancellation during confirmation preserves the remote acknowledgement.
    Plan CRUD, five-field cron validation, next-run display, and claim/run history
-   readers exist with session protection and bounded queries. Plans do not run
-   yet. Scheduler lifecycle, run-once execution, reset-history synchronization,
-   and automatic reset remain unfinished. The default CAPTCHA solver fails
-   closed; claims need a real
-   solver before operational use. Unknown-price grants are not automatically
-   claimed, and highspeed consumption remains opt-in.
+   readers exist with session protection and bounded queries. The scheduler runs
+   detect and activation plans, supports run-once execution, deduplicates trigger
+   minutes durably, and records interrupted runs at startup. Shutdown stops new
+   work and reports tasks that outlast its drain deadline without dropping their
+   join handles. Scheduled claims are blocked without documented free-grant
+   eligibility; reset plans are refused. Reset-history synchronization and
+   automatic reset remain unfinished. The default CAPTCHA solver fails closed;
+   manual claims need a real solver before operational use. Highspeed
+   consumption remains opt-in. Scheduler signal handling has source review but
+   no process-level signal test yet.
 6. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits
    and no-op implementations are placeholders, not completed integrations.
 7. Release packaging, rollback-safe migration, side-by-side traffic validation,

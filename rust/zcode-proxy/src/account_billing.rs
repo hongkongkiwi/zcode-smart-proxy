@@ -19,9 +19,9 @@ use crate::{
     store,
 };
 
-struct Account {
-    id: i64,
-    email: String,
+pub(crate) struct Account {
+    pub(crate) id: i64,
+    pub(crate) email: String,
     jwt: String,
     key: String,
     device_mid: String,
@@ -29,9 +29,9 @@ struct Account {
     remark: Value,
 }
 
-struct Flight<'a> {
-    state: &'a AppState,
-    id: i64,
+pub(crate) struct Flight<'a> {
+    pub(crate) state: &'a AppState,
+    pub(crate) id: i64,
 }
 
 impl Drop for Flight<'_> {
@@ -52,7 +52,7 @@ fn error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
-struct AccountError(StatusCode, &'static str);
+pub(crate) struct AccountError(StatusCode, pub(crate) &'static str);
 
 impl IntoResponse for AccountError {
     fn into_response(self) -> Response {
@@ -64,6 +64,10 @@ fn account(state: &AppState, id: &str) -> Result<Account, AccountError> {
     let id = id
         .parse::<i64>()
         .map_err(|_| AccountError(StatusCode::BAD_REQUEST, "invalid id"))?;
+    load_account(state, id)
+}
+
+pub(crate) fn load_account(state: &AppState, id: i64) -> Result<Account, AccountError> {
     let db = state.db.lock().unwrap();
     let accounts = state.accounts.lock().unwrap();
     let a = accounts
@@ -361,10 +365,10 @@ async fn preview(state: &AppState, a: &Account) -> Result<Vec<Plan>, ()> {
 }
 
 #[derive(Clone, Serialize)]
-struct ResultBody {
-    ok: bool,
+pub(crate) struct ResultBody {
+    pub(crate) ok: bool,
     code: i64,
-    message: String,
+    pub(crate) message: String,
     plan_id: String,
     plan_name: String,
     next_at: i64,
@@ -374,7 +378,7 @@ struct ResultBody {
 }
 
 impl ResultBody {
-    fn failure(message: &str) -> Self {
+    pub(crate) fn failure(message: &str) -> Self {
         Self {
             ok: false,
             code: -1,
@@ -396,6 +400,23 @@ fn publish(
     used_at: i64,
     quota: Option<account_refresh::Quota>,
 ) -> Response {
+    if persist_outcome(state, a, task, &result, used_at, quota).is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "local billing persistence failed; the remote action may already have taken effect",
+        );
+    }
+    Json(result).into_response()
+}
+
+pub(crate) fn persist_outcome(
+    state: &AppState,
+    a: &Account,
+    task: &str,
+    result: &ResultBody,
+    used_at: i64,
+    quota: Option<account_refresh::Quota>,
+) -> Result<(), store::StoreError> {
     let mut db = state.db.lock().unwrap();
     let mut accounts = state.accounts.lock().unwrap();
     // A remote acknowledgement cannot be rolled back if the account changed during HTTP.
@@ -431,26 +452,33 @@ fn publish(
                 last_error,
             }
         });
-    if store::persist_claim_result(&mut db, &record, confirmed).is_err() {
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "local billing persistence failed; the remote action may already have taken effect",
-        );
-    }
+    store::persist_claim_result(&mut db, &record, confirmed)?;
     if quota.is_some() {
         if let Some(current) = accounts.iter_mut().find(|current| current.id == a.id) {
             *current = recovered.take().unwrap();
         }
     }
-    Json(result).into_response()
+    Ok(())
 }
 
-pub async fn handle_detect(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    let a = match account(&state, &id) {
-        Ok(a) => a,
-        Err(e) => return e.into_response(),
-    };
-    let preview = preview(&state, &a).await;
+fn persist_task(
+    state: &AppState,
+    a: &Account,
+    task: &str,
+    mut result: ResultBody,
+    quota: Option<account_refresh::Quota>,
+) -> ResultBody {
+    if persist_outcome(state, a, task, &result, 0, quota).is_err() {
+        result.ok = false;
+        result
+            .message
+            .push_str("; local persistence failed; remote outcome may already have taken effect");
+    }
+    result
+}
+
+async fn detect_outcome(state: &AppState, a: &Account) -> (ResultBody, Result<Vec<Plan>, ()>) {
+    let preview = preview(state, a).await;
     let mut result = ResultBody::failure("billing preview failed");
     if let Ok(plans) = &preview {
         result.ok = true;
@@ -467,6 +495,20 @@ pub async fn handle_detect(State(state): State<Arc<AppState>>, Path(id): Path<St
             format!("发现 {} 个活动: {}", plans.len(), result.plan_name)
         };
     }
+    (result, preview)
+}
+
+pub(crate) async fn detect_task(state: &AppState, a: &Account) -> ResultBody {
+    let (result, _) = detect_outcome(state, a).await;
+    persist_task(state, a, "detect", result, None)
+}
+
+pub async fn handle_detect(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let a = match account(&state, &id) {
+        Ok(a) => a,
+        Err(e) => return e.into_response(),
+    };
+    let (result, preview) = detect_outcome(&state, &a).await;
     let persisted = publish(&state, &a, "detect", result, 0, None);
     if persisted.status() != StatusCode::OK {
         return persisted;
@@ -491,7 +533,7 @@ async fn solve(state: &AppState) -> Option<String> {
     .filter(|p| !p.trim().is_empty())
 }
 
-async fn claim(state: &AppState, a: &Account) -> ResultBody {
+pub(crate) async fn claim_task(state: &AppState, a: &Account) -> ResultBody {
     let plans = match preview(state, a).await {
         Ok(p) => p,
         Err(()) => return ResultBody::failure("billing preview failed"),
@@ -655,7 +697,7 @@ pub async fn handle_claim(State(state): State<Arc<AppState>>, Path(id): Path<Str
         state: &state,
         id: a.id,
     };
-    let result = claim(&state, &a).await;
+    let result = claim_task(&state, &a).await;
     if result.ok && !result.plan_id.is_empty() {
         audit_then_confirm(&state, &a, "claim", result, 0).await
     } else {
@@ -681,9 +723,22 @@ pub async fn handle_activate(
         state: &state,
         id: a.id,
     };
+    let (result, quota) = activate_outcome(&state, &a).await;
+    publish(&state, &a, "activate", result, 0, quota)
+}
+
+pub(crate) async fn activate_task(state: &AppState, a: &Account) -> ResultBody {
+    let (result, quota) = activate_outcome(state, a).await;
+    persist_task(state, a, "activate", result, quota)
+}
+
+async fn activate_outcome(
+    state: &AppState,
+    a: &Account,
+) -> (ResultBody, Option<account_refresh::Quota>) {
     let mut result = ResultBody::failure("activation identity unavailable");
     if a.user_id.is_empty() {
-        return publish(&state, &a, "activate", result, 0, None);
+        return (result, None);
     }
     for element in ["app_launch", "app_daily_active"] {
         let os = if std::env::consts::OS == "macos" {
@@ -697,8 +752,8 @@ pub async fn handle_activate(
             "app_version":state.management.app_version,"device_os_category":os,"device_os_version":"",
             "device_mid":a.device_mid,"mac_id":"","marketing_params":"{}"});
         match request(
-            &state,
-            &a,
+            state,
+            a,
             reqwest::Method::POST,
             &state.automation.event_report,
             Some(&payload),
@@ -710,22 +765,22 @@ pub async fn handle_activate(
             Ok((status, body)) if acknowledged(status, &body) => {}
             _ => {
                 result.message = "activation event failed; remote outcome may be partial".into();
-                return publish(&state, &a, "activate", result, 0, None);
+                return (result, None);
             }
         }
     }
-    let quota = account_refresh::confirm_billing(&state, billing_token(&a), &a.device_mid).await;
+    let quota = account_refresh::confirm_billing(state, billing_token(a), &a.device_mid).await;
     match quota {
         Ok(quota) => {
             result.ok = true;
             result.code = 0;
             result.plan_name = quota.plan_tier.clone();
             result.message = "激活成功，已确认当前套餐".into();
-            publish(&state, &a, "activate", result, 0, Some(quota))
+            (result, Some(quota))
         }
         Err(_) => {
             result.message = "activation events acknowledged; quota confirmation failed".into();
-            publish(&state, &a, "activate", result, 0, None)
+            (result, None)
         }
     }
 }

@@ -695,6 +695,166 @@ pub(crate) fn persist_claim_result(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub(crate) struct ClaimPlanRow {
+    pub id: i64,
+    pub plan_name: String,
+    pub cron_expr: String,
+    pub is_active: bool,
+    pub target_type: String,
+    pub account_id: i64,
+    pub account_group: String,
+    pub task_type: String,
+    pub auto_pick: bool,
+    pub delay_seconds: i64,
+    pub last_run_at: String,
+    pub last_run_status: String,
+    pub last_run_msg: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub(crate) fn list_claim_plans(conn: &Connection) -> Result<Vec<ClaimPlanRow>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT id,plan_name,cron_expr,is_active,target_type,account_id,account_group,
+            task_type,auto_pick,delay_seconds,last_run_at,last_run_status,last_run_msg,
+            created_at,updated_at FROM claim_plans ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ClaimPlanRow {
+            id: r.get(0)?,
+            plan_name: r.get(1)?,
+            cron_expr: r.get(2)?,
+            is_active: r.get::<_, i64>(3)? == 1,
+            target_type: r.get(4)?,
+            account_id: r.get(5)?,
+            account_group: r.get(6)?,
+            task_type: r.get(7)?,
+            auto_pick: r.get::<_, i64>(8)? == 1,
+            delay_seconds: r.get(9)?,
+            last_run_at: r.get(10)?,
+            last_run_status: r.get(11)?,
+            last_run_msg: r.get(12)?,
+            created_at: r.get(13)?,
+            updated_at: r.get(14)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub(crate) fn claim_plan_minute(
+    conn: &Connection,
+    id: i64,
+    run_at: &str,
+) -> Result<bool, StoreError> {
+    Ok(conn.execute(
+        "UPDATE claim_plans SET last_run_at=?2,last_run_status='running',last_run_msg='执行中'
+         WHERE id=?1 AND (last_run_at='' OR substr(last_run_at,1,16)<>substr(?2,1,16))",
+        rusqlite::params![id, run_at],
+    )? == 1)
+}
+
+pub(crate) fn update_claim_plan_run(
+    conn: &Connection,
+    id: i64,
+    status: &str,
+    message: &str,
+    run_at: &str,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "UPDATE claim_plans SET last_run_at=?4,last_run_status=?2,last_run_msg=?3 WHERE id=?1",
+        rusqlite::params![id, status, message, run_at],
+    )?;
+    Ok(())
+}
+
+pub(crate) struct PlanRunRow<'a> {
+    pub plan: &'a ClaimPlanRow,
+    pub run_at: &'a str,
+    pub status: &'a str,
+    pub message: &'a str,
+    pub total: i64,
+    pub success: i64,
+    pub fail: i64,
+    pub duration_ms: i64,
+}
+
+pub(crate) fn insert_plan_run_record(
+    conn: &Connection,
+    run: &PlanRunRow<'_>,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO plan_run_records(plan_id,plan_name,task_type,target_type,account_id,
+            run_at,status,message,total,success_count,fail_count,duration_ms)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        rusqlite::params![
+            run.plan.id,
+            run.plan.plan_name,
+            run.plan.task_type,
+            run.plan.target_type,
+            run.plan.account_id,
+            run.run_at,
+            run.status,
+            run.message,
+            run.total,
+            run.success,
+            run.fail,
+            run.duration_ms
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn finish_plan_run(
+    conn: &mut Connection,
+    run: &PlanRunRow<'_>,
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    update_claim_plan_run(&tx, run.plan.id, run.status, run.message, run.run_at)?;
+    insert_plan_run_record(&tx, run)?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn reconcile_plan_runs(
+    conn: &mut Connection,
+    fallback: &str,
+) -> Result<usize, StoreError> {
+    let tx = conn.transaction()?;
+    let plans = list_claim_plans(&tx)?;
+    let mut count = 0;
+    for plan in plans.iter().filter(|p| p.last_run_status == "running") {
+        let run_at = if plan.last_run_at.is_empty() {
+            fallback
+        } else {
+            &plan.last_run_at
+        };
+        let changed = tx.execute(
+            "UPDATE claim_plans SET last_run_status='failed',last_run_msg='进程重启中断',last_run_at=?2
+             WHERE id=?1 AND last_run_status='running'",
+            rusqlite::params![plan.id,run_at],
+        )?;
+        if changed == 1 {
+            insert_plan_run_record(
+                &tx,
+                &PlanRunRow {
+                    plan,
+                    run_at,
+                    status: "failed",
+                    message: "进程重启中断",
+                    total: 0,
+                    success: 0,
+                    fail: 0,
+                    duration_ms: 0,
+                },
+            )?;
+            count += 1;
+        }
+    }
+    tx.commit()?;
+    Ok(count)
+}
+
 pub(crate) fn persist_confirmation(
     conn: &mut Connection,
     id: i64,
