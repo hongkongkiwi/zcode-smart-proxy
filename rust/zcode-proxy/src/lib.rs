@@ -11,6 +11,7 @@ pub mod admin;
 pub mod auth;
 mod desktop_credentials;
 pub mod engine;
+pub mod gateway_admin;
 pub mod go_compat;
 pub mod go_import;
 pub mod openai_routes;
@@ -73,6 +74,14 @@ fn data_plane(state: Arc<AppState>) -> Router {
 fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
+        .route(
+            "/api/keys",
+            get(gateway_admin::handle_list).post(gateway_admin::handle_create),
+        )
+        .route(
+            "/api/keys/:id",
+            put(gateway_admin::handle_update).delete(gateway_admin::handle_delete),
+        )
         .route(
             "/api/accounts/oauth/start",
             post(account_oauth::handle_start),

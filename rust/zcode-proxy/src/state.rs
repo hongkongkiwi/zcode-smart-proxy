@@ -215,7 +215,10 @@ impl AppState {
             );
             accounts.push(a);
         }
-        let named_keys = store::list_gateway_keys(&db);
+        let named_keys = store::try_list_gateway_keys(&db)?
+            .into_iter()
+            .map(|row| row.key)
+            .collect();
         Ok(Self {
             root_key,
             upstream,

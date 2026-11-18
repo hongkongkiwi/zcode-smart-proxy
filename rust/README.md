@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 279 tests across 47 suites, and strict Clippy
+The current workspace run passes 284 tests across 48 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -80,7 +80,12 @@ fixtures. These checks do not establish Go feature parity.
    credential, including unselected accounts. The offline database importer now
    projects all account bundle metadata and re-encrypts all six credential
    fields while preserving account IDs, cooldowns, balances, and routing state.
-3. Remaining admin step-up surfaces, named-key management, and passkeys. TOTP
+3. Remaining admin step-up surfaces and passkeys. Named gateway keys now have
+   session-protected CRUD, create-time password step-up, one-time plaintext
+   display, hashed storage, policy validation, and immediate authentication
+   updates without clearing rate history. Key creation currently holds the DB
+   writer lock during password verification to keep the checked password stable
+   through commit; this can delay concurrent usage commits. TOTP
    confirmation now requires the current password and a pending setup less than
    ten minutes old. Confirmation and disable have separate peer/action throttles;
    disable requires both password and an active factor or recovery proof.

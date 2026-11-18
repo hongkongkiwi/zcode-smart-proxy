@@ -178,6 +178,24 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
         UPDATE accounts SET user_id = 'rust:' || lower(hex(randomblob(16)))
         WHERE user_id IS NULL OR user_id = ''; ",
     )?;
+    let mut gateway_stmt = conn.prepare("PRAGMA table_info(gateway_keys)")?;
+    let gateway_columns = gateway_stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (name, definition) in [
+        ("key_prefix", "TEXT NOT NULL DEFAULT ''"),
+        ("last_used_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_at", "TEXT NOT NULL DEFAULT ''"),
+        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        if !gateway_columns.iter().any(|column| column == name) {
+            conn.execute(
+                &format!("ALTER TABLE gateway_keys ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
+    }
+    drop(gateway_stmt);
     conn.pragma_update(None, "application_id", RUST_APPLICATION_ID)?;
     drop(stmt);
     tx.commit()?;
@@ -597,39 +615,121 @@ pub fn upsert_gateway_key(conn: &Connection, k: &crate::state::NamedKey) {
     );
 }
 
-pub fn list_gateway_keys(conn: &Connection) -> Vec<crate::state::NamedKey> {
-    let mut stmt = match conn.prepare(
-        "SELECT id, name, key_hash, enabled, models, rpm_limit, rate_5h,
-            rate_1d, rate_7d, quota_total, quota_used FROM gateway_keys",
-    ) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let rows = stmt.query_map([], |r| {
-        Ok(crate::state::NamedKey {
-            id: r.get(0)?,
-            name: r.get(1)?,
-            key_hash: r.get(2)?,
-            enabled: r.get::<_, i64>(3)? != 0,
-            models: r.get(4)?,
-            rpm_limit: r.get(5)?,
-            rate_5h: r.get(6)?,
-            rate_1d: r.get(7)?,
-            rate_7d: r.get(8)?,
-            quota_total: r.get(9)?,
-            quota_used: r.get(10)?,
+pub struct GatewayKeyRow {
+    pub key: crate::state::NamedKey,
+    pub key_prefix: String,
+    pub last_used_at: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl GatewayKeyRow {
+    pub fn public_view(&self) -> serde_json::Value {
+        let k = &self.key;
+        serde_json::json!({
+            "id": k.id, "name": k.name, "key_prefix": self.key_prefix,
+            "enabled": k.enabled, "models": k.models, "rpm_limit": k.rpm_limit,
+            "rate_5h": k.rate_5h, "rate_1d": k.rate_1d, "rate_7d": k.rate_7d,
+            "quota_total": k.quota_total, "quota_used": k.quota_used,
+            "last_used_at": self.last_used_at, "created_at": self.created_at,
+            "updated_at": self.updated_at,
         })
-    });
-    match rows {
-        Ok(iter) => iter.filter_map(Result::ok).collect(),
-        Err(_) => Vec::new(),
     }
+}
+
+pub fn try_list_gateway_keys(conn: &Connection) -> rusqlite::Result<Vec<GatewayKeyRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, key_hash, enabled, models, rpm_limit, rate_5h,
+            rate_1d, rate_7d, quota_total, quota_used, key_prefix, last_used_at,
+            created_at, updated_at FROM gateway_keys ORDER BY id ASC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(GatewayKeyRow {
+            key: crate::state::NamedKey {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                key_hash: r.get(2)?,
+                enabled: r.get::<_, i64>(3)? != 0,
+                models: r.get(4)?,
+                rpm_limit: r.get(5)?,
+                rate_5h: r.get(6)?,
+                rate_1d: r.get(7)?,
+                rate_7d: r.get(8)?,
+                quota_total: r.get(9)?,
+                quota_used: r.get(10)?,
+            },
+            key_prefix: r.get(11)?,
+            last_used_at: r.get(12)?,
+            created_at: r.get(13)?,
+            updated_at: r.get(14)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_gateway_keys(conn: &Connection) -> Vec<crate::state::NamedKey> {
+    try_list_gateway_keys(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| row.key)
+        .collect()
+}
+
+pub fn create_gateway_key(
+    conn: &Connection,
+    key: &crate::state::NamedKey,
+    prefix: &str,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO gateway_keys(name,key_hash,key_prefix,enabled,models,rpm_limit,
+            rate_5h,rate_1d,rate_7d,quota_total,quota_used,created_at,updated_at)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,
+            datetime('now','localtime'),datetime('now','localtime'))",
+        rusqlite::params![
+            key.name,
+            key.key_hash,
+            prefix,
+            key.enabled,
+            key.models,
+            key.rpm_limit,
+            key.rate_5h,
+            key.rate_1d,
+            key.rate_7d,
+            key.quota_total
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_gateway_key(conn: &Connection, key: &crate::state::NamedKey) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE gateway_keys SET name=?1,enabled=?2,models=?3,rpm_limit=?4,
+            rate_5h=?5,rate_1d=?6,rate_7d=?7,quota_total=?8,
+            updated_at=datetime('now','localtime') WHERE id=?9",
+        rusqlite::params![
+            key.name,
+            key.enabled,
+            key.models,
+            key.rpm_limit,
+            key.rate_5h,
+            key.rate_1d,
+            key.rate_7d,
+            key.quota_total,
+            key.id
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_gateway_key(conn: &Connection, id: i64) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM gateway_keys WHERE id=?1", [id])?;
+    Ok(())
 }
 
 pub fn bump_gateway_key_usage(conn: &Connection, id: i64, charge: i64) {
     let _ = conn.execute(
-        "UPDATE gateway_keys SET quota_used = quota_used + ?1 WHERE id = ?2",
-        rusqlite::params![charge, id],
+        "UPDATE gateway_keys SET quota_used = quota_used + ?1, last_used_at = ?3 WHERE id = ?2",
+        rusqlite::params![charge, id, crate::auth::now_secs()],
     );
 }
 
@@ -678,8 +778,8 @@ pub fn record_usage(
     )?;
     let balance = if rec.gateway_key_id > 0 {
         tx.execute(
-            "UPDATE gateway_keys SET quota_used = quota_used + ?1 WHERE id = ?2",
-            rusqlite::params![rec.quota_charge, rec.gateway_key_id],
+            "UPDATE gateway_keys SET quota_used = quota_used + ?1, last_used_at = ?3 WHERE id = ?2",
+            rusqlite::params![rec.quota_charge, rec.gateway_key_id, created_at],
         )?;
         tx.query_row(
             "SELECT quota_used FROM gateway_keys WHERE id = ?1",
