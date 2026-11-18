@@ -334,6 +334,11 @@ const SETTINGS_WHITELIST: &[&str] = &[
     "selection_strategy",
     "sticky_sessions",
     "gateway_paused",
+    "auto_reset_enabled",
+    "auto_reset_expiry_enabled",
+    "auto_reset_min_wait_minutes",
+    "auto_reset_expiry_spend_minutes",
+    "auto_reset_min_wait_week_hours",
 ];
 
 pub async fn handle_put_settings(
@@ -350,16 +355,30 @@ pub async fn handle_put_settings(
         }
         let valid = matches!(
             (key.as_str(), value.as_str()),
-            ("gateway_paused" | "sticky_sessions", Some("0" | "1"))
-                | (
-                    "paid_fallback_mode",
-                    Some("free_first" | "balanced" | "never")
-                )
-                | (
-                    "selection_strategy",
-                    Some("random" | "round_robin" | "best_quota" | "priority")
-                )
-        );
+            (
+                "gateway_paused"
+                    | "sticky_sessions"
+                    | "auto_reset_enabled"
+                    | "auto_reset_expiry_enabled",
+                Some("0" | "1")
+            ) | (
+                "paid_fallback_mode",
+                Some("free_first" | "balanced" | "never")
+            ) | (
+                "selection_strategy",
+                Some("random" | "round_robin" | "best_quota" | "priority")
+            )
+        ) || match key.as_str() {
+            "auto_reset_min_wait_minutes" | "auto_reset_expiry_spend_minutes" => value
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_some_and(|n| (0..=1440).contains(&n)),
+            "auto_reset_min_wait_week_hours" => value
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_some_and(|n| (0..=168).contains(&n)),
+            _ => false,
+        };
         if !valid {
             return (StatusCode::BAD_REQUEST, "invalid setting value").into_response();
         }

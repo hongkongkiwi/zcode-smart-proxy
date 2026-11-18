@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 401 tests across 61 suites, and strict Clippy
+The current workspace run passes 409 tests across 62 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -128,7 +128,9 @@ fixtures. These checks do not establish Go feature parity.
    success-only throttling. GET reset-status remains read-only and never spends
    a reset slot. Natural-wait decisions and slot-attributed replay guard helpers
    have independent boundary tests, but automatic reset execution and triggers
-   remain unfinished. The legacy slot-lifetime helper is retained for API
+   remain unfinished. The admin API validates the five opt-in reset settings
+   and persists them atomically, but no worker consumes them yet. Missing flags
+   stay absent and mean disabled. The legacy slot-lifetime helper is retained for API
    compatibility and is not suitable for the automatic reset service.
    The default CAPTCHA solver fails closed;
    manual claims need a real solver before operational use. Highspeed
