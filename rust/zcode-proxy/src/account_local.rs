@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{self, File},
     io::{ErrorKind, Read},
     path::{Path, PathBuf},
     sync::Arc,
@@ -28,6 +28,7 @@ use crate::{
 
 const MAX_REQUEST: usize = 16 << 10;
 const MAX_FILE: usize = 1 << 20;
+const MAX_INSTANCES: usize = 64;
 static IMPORT_JOBS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 #[derive(Default, Deserialize)]
@@ -45,6 +46,12 @@ fn error(status: StatusCode, message: &str) -> Response {
 }
 
 fn read_file(path: &Path) -> Result<Option<String>, ()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.is_file() || metadata.len() > MAX_FILE as u64 => return Err(()),
+        Ok(_) => (),
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    }
     let file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
@@ -63,16 +70,31 @@ fn read_file(path: &Path) -> Result<Option<String>, ()> {
     String::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 
-fn local_path(selected: Option<PathBuf>) -> Result<PathBuf, ()> {
-    if let Some(path) = selected {
-        return Ok(path);
-    }
+fn local_home() -> Result<PathBuf, ()> {
     let variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    let home = std::env::var_os(variable)
-        .filter(|home| !home.is_empty())
-        .ok_or(())?;
     // ImportFromLocalClient uses os.UserHomeDir, not ZCODE_SWITCH_HOME.
-    Ok(PathBuf::from(home).join(".zcode/v2/credentials.json"))
+    std::env::var_os(variable)
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .ok_or(())
+}
+
+// HOME is the trust anchor; no directory below it may redirect discovery.
+fn check_directory(home: &Path, directory: &Path) -> Result<bool, ()> {
+    let mut path = home.to_owned();
+    for component in directory.strip_prefix(home).map_err(|_| ())?.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(());
+        }
+        path.push(component);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => (),
+            Ok(_) => return Err(()),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err(()),
+        }
+    }
+    Ok(true)
 }
 
 fn string<'a>(value: &'a Value, keys: &[&str]) -> &'a str {
@@ -100,18 +122,22 @@ fn claims(token: &str) -> Value {
 }
 
 fn read_account(
-    selected: Option<PathBuf>,
+    path: &Path,
     secret: Option<&str>,
+    fallback_home: Option<&Path>,
     group: String,
-) -> Result<BundleAccount, ()> {
-    let path = local_path(selected)?;
+    remark: String,
+) -> Result<Option<BundleAccount>, ()> {
     let directory = path.parent().ok_or(())?;
-    let raw = read_file(&path)?.ok_or(())?;
+    let Some(raw) = read_file(path)? else {
+        return Ok(None);
+    };
     let credentials: HashMap<String, String> = serde_json::from_str(&raw).map_err(|_| ())?;
     let decode = |key: &str| {
         crate::desktop_credentials::decrypt(
             credentials.get(key).map(String::as_str).unwrap_or(""),
             secret,
+            fallback_home,
         )
     };
     let provider = decode("oauth:active_provider")?;
@@ -171,7 +197,7 @@ fn read_account(
     if let Some(config) = config {
         snapshot["config.json"] = config.into();
     }
-    Ok(BundleAccount {
+    Ok(Some(BundleAccount {
         user_id,
         email: string(&profile, &["email"]).to_owned(),
         display_name: string(&profile, &["name", "username", "displayName"]).to_owned(),
@@ -184,9 +210,9 @@ fn read_account(
         device_mid: string(&telemetry, &["deviceMid"]).to_owned(),
         creds_raw: snapshot.to_string(),
         account_group: group,
-        remark: "本地客户端导入".into(),
+        remark,
         ..Default::default()
-    })
+    }))
 }
 
 fn persist(state: &AppState, mut account: BundleAccount) -> Result<Value, ()> {
@@ -263,6 +289,164 @@ fn persist(state: &AppState, mut account: BundleAccount) -> Result<Value, ()> {
     Ok(public)
 }
 
+fn import_local(state: &AppState, group: String) -> Result<(StatusCode, Value), ()> {
+    let secret = state
+        .local_credentials_secret
+        .as_deref()
+        .map(String::as_str);
+    let mut imported = Vec::new();
+    let mut errors = Vec::new();
+    let mut storage_failed = false;
+    let home = if state.local_credentials_path.is_none() {
+        Some(local_home()?)
+    } else {
+        None
+    };
+    let primary = match &state.local_credentials_path {
+        Some(path) => path.clone(),
+        None => home.as_ref().ok_or(())?.join(".zcode/v2/credentials.json"),
+    };
+    let primary_present = match &home {
+        Some(home) => match check_directory(home, primary.parent().ok_or(())?) {
+            Ok(present) => present,
+            Err(()) => {
+                errors.push(json!({"instance": "primary", "error": "primary directory unavailable or invalid"}));
+                false
+            }
+        },
+        None => true,
+    };
+    // A selected or present primary must parse before any instance can commit.
+    let primary_account = if primary_present {
+        read_account(
+            &primary,
+            secret,
+            home.as_deref(),
+            group.clone(),
+            "本地客户端导入".into(),
+        )?
+    } else {
+        None
+    };
+    if state.local_credentials_path.is_some() && primary_account.is_none() {
+        return Err(());
+    }
+    if let Some(account) = primary_account {
+        match persist(state, account) {
+            Ok(account) => imported.push(account),
+            Err(()) => {
+                storage_failed = true;
+                errors.push(
+                    json!({"instance": "primary", "error": "credential storage operation failed"}),
+                );
+            }
+        }
+    }
+    if let Some(home) = home {
+        let mut roots = vec![home.join(".zcode-multi")];
+        if cfg!(target_os = "macos") {
+            roots.push(home.join("Library/Application Support/zcode-multi"));
+        }
+        let mut scanned = 0;
+        for root in roots {
+            if scanned == MAX_INSTANCES {
+                break;
+            }
+            match check_directory(&home, &root) {
+                Ok(false) => continue,
+                Ok(true) => (),
+                Err(()) => {
+                    errors.push(json!({"instance": "discovery", "error": "instance directory unavailable or invalid"}));
+                    continue;
+                }
+            }
+            let entries = match fs::read_dir(&root) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    errors.push(json!({"instance": "discovery", "error": "instance directory unavailable or invalid"}));
+                    continue;
+                }
+            };
+            let mut candidates = std::collections::BTreeMap::new();
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        errors.push(json!({"instance": "discovery", "error": "instance directory unavailable or invalid"}));
+                        continue;
+                    }
+                };
+                let kind = match entry.file_type() {
+                    Ok(kind) => kind,
+                    Err(_) => {
+                        errors.push(json!({"instance": entry.file_name().to_string_lossy(), "error": "instance directory unavailable or invalid"}));
+                        continue;
+                    }
+                };
+                if !kind.is_dir() && !kind.is_symlink() {
+                    continue;
+                }
+                candidates.insert(entry.file_name(), entry);
+                if candidates.len() > MAX_INSTANCES - scanned {
+                    candidates.pop_last();
+                }
+            }
+            for entry in candidates.into_values() {
+                scanned += 1;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let instance = entry.path();
+                let directory = instance.join("v2");
+                match check_directory(&home, &directory) {
+                    Ok(false) => continue,
+                    Ok(true) => (),
+                    Err(()) => {
+                        errors.push(json!({"instance": name, "error": "instance directory unavailable or invalid"}));
+                        continue;
+                    }
+                }
+                match read_account(
+                    &directory.join("credentials.json"),
+                    secret,
+                    Some(&instance),
+                    group.clone(),
+                    format!("多实例导入: {name}"),
+                ) {
+                    Ok(Some(account)) => match persist(state, account) {
+                        Ok(account) => imported.push(account),
+                        Err(()) => {
+                            storage_failed = true;
+                            errors.push(json!({"instance": name, "error": "credential storage operation failed"}));
+                        }
+                    },
+                    Ok(None) => (),
+                    Err(()) => errors.push(json!({"instance": name, "error": "local credentials unavailable or invalid"})),
+                }
+            }
+        }
+    }
+    let status = if storage_failed {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else if imported.is_empty() {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::OK
+    };
+    let mut reply = json!({
+        "success": status == StatusCode::OK,
+        "account": imported.first(),
+        "imported": imported.len(),
+        "accounts": imported,
+        "errors": errors,
+    });
+    if status != StatusCode::OK {
+        reply["error"] = json!({
+            "message": if storage_failed { "credential storage operation failed" } else { "local credentials unavailable or invalid" },
+            "type": "api_error",
+        });
+    }
+    Ok((status, reply))
+}
+
 pub async fn handle_import(State(state): State<Arc<AppState>>, request: Request) -> Response {
     let body = match to_bytes(request.into_body(), MAX_REQUEST).await {
         Ok(body) => body,
@@ -287,21 +471,12 @@ pub async fn handle_import(State(state): State<Arc<AppState>>, request: Request)
     let result = tokio::task::spawn_blocking(move || {
         // Cancellation must not release admission while the blocking job still runs.
         let _permit = permit;
-        let account = read_account(
-            state.local_credentials_path.clone(),
-            state
-                .local_credentials_secret
-                .as_deref()
-                .map(String::as_str),
-            request.group,
-        )
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-        persist(&state, account).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        import_local(&state, request.group)
     })
     .await;
     match result {
-        Ok(Ok(account)) => Json(json!({"success": true, "account": account})).into_response(),
-        Ok(Err(StatusCode::BAD_REQUEST)) => error(
+        Ok(Ok((status, reply))) => (status, Json(reply)).into_response(),
+        Ok(Err(())) => error(
             StatusCode::BAD_REQUEST,
             "local credentials unavailable or invalid",
         ),

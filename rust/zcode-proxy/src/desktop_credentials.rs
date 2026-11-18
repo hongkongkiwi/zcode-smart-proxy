@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
@@ -6,7 +8,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-fn secret(explicit: Option<&str>) -> Result<Zeroizing<String>, ()> {
+fn secret(explicit: Option<&str>, fallback_home: Option<&Path>) -> Result<Zeroizing<String>, ()> {
     if let Some(secret) = explicit {
         return Ok(Zeroizing::new(secret.to_owned()));
     }
@@ -16,7 +18,10 @@ fn secret(explicit: Option<&str>) -> Result<Zeroizing<String>, ()> {
         _ => (),
     }
     let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    let home = std::env::var(home_var).unwrap_or_default();
+    let home = match fallback_home {
+        Some(home) => home.to_str().ok_or(())?.to_owned(),
+        None => std::env::var(home_var).unwrap_or_default(),
+    };
     let username = ["USERNAME", "USER", "LOGNAME"]
         .into_iter()
         .filter_map(|name| std::env::var(name).ok())
@@ -32,7 +37,11 @@ fn secret(explicit: Option<&str>) -> Result<Zeroizing<String>, ()> {
     )))
 }
 
-pub(crate) fn decrypt(value: &str, explicit: Option<&str>) -> Result<String, ()> {
+pub(crate) fn decrypt(
+    value: &str,
+    explicit: Option<&str>,
+    fallback_home: Option<&Path>,
+) -> Result<String, ()> {
     let Some(body) = value.strip_prefix("enc:v1:") else {
         return Ok(value.to_owned());
     };
@@ -50,7 +59,7 @@ pub(crate) fn decrypt(value: &str, explicit: Option<&str>) -> Result<String, ()>
         return Err(());
     }
     ciphertext.extend_from_slice(&tag);
-    let secret = secret(explicit)?;
+    let secret = secret(explicit, fallback_home)?;
     let key = Zeroizing::new(<[u8; 32]>::from(Sha256::digest(secret.as_bytes())));
     let cipher = Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| ())?;
     let plaintext = Zeroizing::new(

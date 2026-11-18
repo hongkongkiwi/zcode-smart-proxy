@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 351 tests across 57 suites, and strict Clippy
+The current workspace run passes 361 tests across 58 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -76,8 +76,14 @@ fixtures. These checks do not establish Go feature parity.
    quota refresh through a bounded manager. It deduplicates pending accounts,
    serializes follow-ups, skips deleted/disabled accounts, and retains in-flight
    handles when shutdown exceeds its deadline. Bundle and plain-add routes do
-   not schedule refresh, matching Go. Installation reporting and multi-instance
-   discovery remain unfinished. Per-account device identities persist as UUIDv4
+   not schedule refresh, matching Go. Default local import discovers up to 64
+   desktop instances with per-instance credential secrets, deterministic order,
+   bounded files, and static symlink checks. An explicit credential path disables
+   discovery. Responses retain the first account and add imported accounts plus
+   sanitized per-instance errors; storage failures report committed counts.
+   Directory names remain user-supplied labels in remarks/errors. Concurrent
+   filesystem replacement is not protected by descriptor-relative traversal.
+   Installation reporting remains unfinished. Per-account device identities persist as UUIDv4
    values before quota and billing requests. Startup backfills empty identities
    atomically; existing identities remain unchanged.
    Encrypted account bundle export/import now supports Go's current and legacy
