@@ -40,12 +40,12 @@ struct Plan {
 }
 
 #[derive(Default, Serialize)]
-struct Quota {
-    plan_tier: String,
+pub(crate) struct Quota {
+    pub(crate) plan_tier: String,
     plan_expire: String,
     total: Option<f64>,
     used: Option<f64>,
-    remaining: Option<f64>,
+    pub(crate) remaining: Option<f64>,
     percent_used: Option<f64>,
     items: Vec<Item>,
     plans: Vec<Plan>,
@@ -72,6 +72,25 @@ impl Quota {
             self.items
                 .iter()
                 .all(|i| i.remaining.is_some_and(|n| n <= 0.0))
+        }
+    }
+
+    pub(crate) fn confirmed_state<'a>(
+        &self,
+        account: &'a zcode_core::AccountView,
+    ) -> (&'a str, i64, Option<&'static str>) {
+        if !account.enabled || account.status == "disabled" {
+            (account.status.as_str(), account.cooling_until, None)
+        } else if self.exhausted() {
+            ("exhausted", 0, Some("quota exhausted"))
+        } else if matches!(
+            account.status.as_str(),
+            "exhausted" | "inactive" | "invalid"
+        ) || (account.status == "cooling" && account.cooling_until <= now_secs())
+        {
+            ("active", 0, Some(""))
+        } else {
+            (account.status.as_str(), account.cooling_until, None)
         }
     }
 
@@ -261,16 +280,8 @@ pub async fn handle_refresh(
         status = "inactive";
         cooling = 0;
         last_error = Some("Coding Plan is not activated");
-    } else if quota.exhausted() {
-        status = "exhausted";
-        cooling = 0;
-        last_error = Some("quota exhausted");
-    } else if matches!(status, "exhausted" | "inactive" | "invalid")
-        || (status == "cooling" && cooling <= now_secs())
-    {
-        status = "active";
-        cooling = 0;
-        last_error = Some("");
+    } else {
+        (status, cooling, last_error) = quota.confirmed_state(account);
     }
     // Auth/entitlement failures change state only, preserving the previous quota snapshot.
     let result = if quota.auth_failed || quota.not_entitled {
@@ -388,11 +399,11 @@ async fn exchange_token(
     })
 }
 
-struct Client {
-    http: reqwest::Client,
+pub(crate) struct Client {
+    pub(crate) http: reqwest::Client,
 }
 
-fn request_id() -> String {
+pub(crate) fn request_id() -> String {
     use rand::RngCore;
     let mut bytes = [0_u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -433,14 +444,14 @@ fn os_version() -> String {
     "10.0.19044".into()
 }
 
-enum FetchError {
+pub(crate) enum FetchError {
     Auth,
     Operational,
     InvalidBody,
 }
 
 impl Client {
-    fn new(app_version: &str, device_mid: &str) -> Result<Self, FetchError> {
+    pub(crate) fn new(app_version: &str, device_mid: &str) -> Result<Self, FetchError> {
         let os = match std::env::consts::OS {
             "macos" => "darwin",
             other => other,
@@ -613,6 +624,19 @@ async fn billing(client: &Client, state: &AppState, jwt: &str) -> Result<Quota, 
     } else {
         Err(FetchError::Operational)
     }
+}
+
+pub(crate) async fn confirm_billing(
+    state: &AppState,
+    jwt: &str,
+    device_mid: &str,
+) -> Result<Quota, FetchError> {
+    let client = Client::new(&state.management.app_version, device_mid)?;
+    let quota = billing(&client, state, jwt).await?;
+    if quota.auth_failed || quota.not_entitled || quota.plan_tier.is_empty() {
+        return Err(FetchError::Operational);
+    }
+    Ok(quota)
 }
 
 async fn monitor(client: &Client, state: &AppState, key: &str) -> Result<Quota, FetchError> {

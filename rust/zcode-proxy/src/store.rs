@@ -136,6 +136,21 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
             quota_total INTEGER NOT NULL DEFAULT 0,
             quota_used INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS claim_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+            account_id INTEGER NOT NULL DEFAULT 0,
+            email TEXT NOT NULL DEFAULT '',
+            task_type TEXT NOT NULL DEFAULT 'claim',
+            plan_id TEXT NOT NULL DEFAULT '',
+            plan_name TEXT NOT NULL DEFAULT '',
+            success INTEGER NOT NULL DEFAULT 0,
+            code INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL DEFAULT '',
+            next_at INTEGER NOT NULL DEFAULT 0,
+            used_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_claim_records_account ON claim_records(account_id);
         CREATE TABLE IF NOT EXISTS usage_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at INTEGER NOT NULL,
@@ -165,6 +180,9 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
         ("used_units", "REAL NOT NULL DEFAULT 0"),
         ("last_checked_at", "INTEGER NOT NULL DEFAULT 0"),
         ("last_error", "TEXT NOT NULL DEFAULT ''"),
+        ("last_claim_at", "TEXT NOT NULL DEFAULT ''"),
+        ("last_claim_plan", "TEXT NOT NULL DEFAULT ''"),
+        ("last_claim_msg", "TEXT NOT NULL DEFAULT ''"),
     ] {
         if !columns.iter().any(|column| column == name) {
             conn.execute(
@@ -559,7 +577,8 @@ pub(crate) fn account_public_view(
     account: &zcode_core::AccountView,
 ) -> rusqlite::Result<serde_json::Value> {
     conn.query_row(
-        "SELECT remark,quota_json,plan_tier,plan_expire,total_units,used_units,last_checked_at,last_error
+        "SELECT remark,quota_json,plan_tier,plan_expire,total_units,used_units,last_checked_at,last_error,
+            last_claim_at,last_claim_plan,last_claim_msg
          FROM accounts WHERE id=?1",
         [account.id],
         |row| {
@@ -577,9 +596,89 @@ pub(crate) fn account_public_view(
                 "plan_expire":row.get::<_,String>(3)?,"total_units":row.get::<_,f64>(4)?,
                 "used_units":row.get::<_,f64>(5)?,"last_checked_at":row.get::<_,i64>(6)?,
                 "last_error":row.get::<_,String>(7)?,
+                "last_claim_at":row.get::<_,String>(8)?,
+                "last_claim_plan":row.get::<_,String>(9)?,
+                "last_claim_msg":row.get::<_,String>(10)?,
             }))
         },
     )
+}
+
+pub(crate) struct ClaimRecord<'a> {
+    pub account_id: i64,
+    pub email: &'a str,
+    pub task_type: &'a str,
+    pub plan_id: &'a str,
+    pub plan_name: &'a str,
+    pub success: bool,
+    pub code: i64,
+    pub message: &'a str,
+    pub next_at: i64,
+    pub used_at: i64,
+}
+
+pub(crate) struct ConfirmedQuota<'a> {
+    pub quota: &'a crate::account_refresh::Quota,
+    pub account: &'a zcode_core::AccountView,
+    pub last_error: Option<&'a str>,
+}
+
+/// The ledger, account summary, and optional confirmed quota commit before live publication.
+pub(crate) fn persist_claim_result(
+    conn: &mut Connection,
+    record: &ClaimRecord<'_>,
+    quota: Option<ConfirmedQuota<'_>>,
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE accounts SET last_claim_at=datetime('now','localtime'),
+            last_claim_plan=?1,last_claim_msg=?2 WHERE id=?3",
+        rusqlite::params![record.plan_name, record.message, record.account_id],
+    )?;
+    tx.execute(
+        "INSERT INTO claim_records(account_id,email,task_type,plan_id,plan_name,success,
+            code,message,next_at,used_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        rusqlite::params![
+            record.account_id,
+            record.email,
+            record.task_type,
+            record.plan_id,
+            record.plan_name,
+            record.success,
+            record.code,
+            record.message,
+            record.next_at,
+            record.used_at
+        ],
+    )?;
+    if let Some(ConfirmedQuota {
+        quota: confirmed,
+        account,
+        last_error,
+    }) = quota
+    {
+        let quota = serde_json::to_value(confirmed).map_err(|_| StoreError::Database)?;
+        tx.execute(
+            "UPDATE accounts SET quota_json=?1,plan_tier=?2,plan_expire=?3,total_units=?4,
+                used_units=?5,remaining=?6,last_checked_at=?7,status=?9,cooling_until=?10,
+                last_error=COALESCE(?11,last_error) WHERE id=?8",
+            rusqlite::params![
+                quota.to_string(),
+                quota["plan_tier"].as_str().unwrap_or(""),
+                quota["plan_expire"].as_str().unwrap_or(""),
+                quota["total"].as_f64().unwrap_or(0.0),
+                quota["used"].as_f64().unwrap_or(0.0),
+                quota["remaining"].as_f64().unwrap_or(0.0),
+                crate::auth::now_secs(),
+                record.account_id,
+                account.status,
+                account.cooling_until,
+                last_error
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn delete_account(conn: &Connection, id: i64) {

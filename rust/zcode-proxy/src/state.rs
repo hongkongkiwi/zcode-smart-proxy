@@ -51,6 +51,34 @@ impl Default for ManagementUrls {
 }
 
 #[derive(Clone)]
+pub struct AutomationUrls {
+    pub billing_preview: String,
+    pub billing_claim: String,
+    pub event_report: String,
+    pub reset_status: String,
+    pub reset_use: String,
+    pub captcha_scene: String,
+    pub captcha_prefix: String,
+    pub captcha_region: String,
+}
+
+impl Default for AutomationUrls {
+    fn default() -> Self {
+        Self {
+            billing_preview: "https://zcode.z.ai/api/v1/zcode-plan/billing/preview".into(),
+            billing_claim: "https://zcode.z.ai/api/v1/zcode-plan/billing/claim".into(),
+            event_report: "https://zcode.z.ai/api/v1/event/report".into(),
+            reset_status: "https://zcode.z.ai/api/v1/coding-plan/reset/status".into(),
+            reset_use: "https://zcode.z.ai/api/v1/coding-plan/reset/use".into(),
+            // Go discovers these from client/configs; unknown configuration cannot solve a CAPTCHA.
+            captcha_scene: String::new(),
+            captcha_prefix: String::new(),
+            captcha_region: String::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct OAuthUrls {
     pub authorize: String,
     pub userinfo: String,
@@ -122,6 +150,9 @@ pub struct AppState {
     pub root_key: String,
     pub upstream: UpstreamUrls,
     pub management: ManagementUrls,
+    pub automation: AutomationUrls,
+    pub automation_solver: std::sync::Arc<dyn zcode_core::egress::CaptchaSolver>,
+    pub(crate) automation_inflight: Mutex<std::collections::HashSet<i64>>,
     pub oauth: OAuthUrls,
     pub oauth_poll: PollOAuthUrls,
     /// An explicit credential file confines local import to it and its siblings.
@@ -223,6 +254,9 @@ impl AppState {
             root_key,
             upstream,
             management: ManagementUrls::default(),
+            automation: AutomationUrls::default(),
+            automation_solver: std::sync::Arc::new(zcode_core::egress::NoopSolver),
+            automation_inflight: Mutex::new(std::collections::HashSet::new()),
             oauth: OAuthUrls::default(),
             oauth_poll: PollOAuthUrls::default(),
             local_credentials_path: None,

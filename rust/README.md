@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 284 tests across 48 suites, and strict Clippy
+The current workspace run passes 293 tests across 51 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -91,8 +91,15 @@ fixtures. These checks do not establish Go feature parity.
    disable requires both password and an active factor or recovery proof.
 4. Broader OpenAI compatibility coverage beyond the current streaming tests,
    plus async ticket and highspeed-card workflows.
-5. Actual billing claim/reset execution and scheduled automation. Request
-   builders and pure decision helpers are not running cron jobs.
+5. Manual billing routes cover preview and claim, Start Plan activation events
+   with billing confirmation, and reset status/use. Synthetic HTTP tests cover
+   the wire requests, audit retention after account deletion, activation state
+   recovery, and rollback on ledger failures. Detect audit records, imported
+   identity fallback, and quota refresh after reset remain unfinished, as do
+   scheduled claims, run history, reset-history synchronization, and automatic
+   reset lifecycle. The default CAPTCHA solver fails closed; claims need a real
+   solver before operational use. Unknown-price grants are not automatically
+   claimed, and highspeed consumption remains opt-in.
 6. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits
    and no-op implementations are placeholders, not completed integrations.
 7. Release packaging, rollback-safe migration, side-by-side traffic validation,

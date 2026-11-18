@@ -1,6 +1,7 @@
 //! Library surface: data plane + admin panel, exposed for integration tests
 //! (bin entrypoint in main.rs).
 
+pub mod account_billing;
 pub mod account_bundle;
 pub mod account_local;
 pub mod account_oauth;
@@ -111,6 +112,26 @@ fn admin_api(state: Arc<AppState>) -> Router {
             "/api/accounts/:id",
             axum::routing::delete(crate::account_routes::handle_account_delete)
                 .put(crate::account_routes::handle_account_update),
+        )
+        .route(
+            "/api/accounts/:id/detect",
+            post(account_billing::handle_detect),
+        )
+        .route(
+            "/api/accounts/:id/claim",
+            post(account_billing::handle_claim),
+        )
+        .route(
+            "/api/accounts/:id/activate",
+            post(account_billing::handle_activate),
+        )
+        .route(
+            "/api/accounts/:id/reset",
+            post(account_billing::handle_reset),
+        )
+        .route(
+            "/api/accounts/:id/reset-status",
+            get(account_billing::handle_reset_status),
         )
         .route(
             "/api/accounts/:id/refresh",
