@@ -695,6 +695,85 @@ pub(crate) fn persist_claim_result(
     Ok(())
 }
 
+/// History rows and their per-kind anchors are one commit; callers publish the mirror afterward.
+pub(crate) fn persist_reset_history(
+    conn: &mut Connection,
+    vault: &crate::vault::Vault,
+    account_id: i64,
+    email: &str,
+    latest: &[(&str, i64)],
+) -> Result<(usize, Option<String>), StoreError> {
+    use rusqlite::OptionalExtension;
+
+    let tx = conn.transaction()?;
+    let key = format!("reset_history_seen:{account_id}");
+    let raw: Option<String> = tx
+        .query_row("SELECT value FROM settings WHERE key=?1", [&key], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let raw = raw
+        .map(|raw| {
+            if sensitive_setting(&key) {
+                vault.decrypt(&raw).map_err(StoreError::from)
+            } else {
+                Ok(raw)
+            }
+        })
+        .transpose()?;
+    let mut anchor: std::collections::HashMap<String, i64> = raw
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    let mut inserted = 0;
+    let mut changed = false;
+    for &(kind, used_ms) in latest {
+        let used_sec = used_ms / 1000;
+        if used_sec <= anchor.get(kind).copied().unwrap_or(0) / 1000 {
+            continue;
+        }
+        // Go's legacy wall clock uses today's UTC offset, allowing historical DST skew.
+        let duplicate: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM claim_records
+             WHERE account_id=?1 AND task_type='reset' AND success=1 AND plan_name LIKE ?3
+               AND (used_at=?2 OR (used_at>0 AND ABS(used_at-?2)<900)
+                 OR (used_at=0 AND ABS(CAST(strftime('%s',created_at) AS INTEGER)
+                    - (CAST(strftime('%s','now','localtime') AS INTEGER)
+                       - CAST(strftime('%s','now') AS INTEGER)) - ?2)<5400)))",
+            rusqlite::params![account_id, used_sec, format!("%({kind})%")],
+            |r| r.get(0),
+        )?;
+        if !duplicate {
+            tx.execute(
+                "INSERT INTO claim_records(account_id,email,task_type,plan_name,success,message,used_at)
+                 VALUES(?1,?2,'reset',?3,1,'上游重置记录（非本网关执行）',?4)",
+                rusqlite::params![account_id, email, format!("配额重置({kind})"), used_sec],
+            )?;
+            inserted += 1;
+        }
+        anchor.insert(kind.to_owned(), used_ms);
+        changed = true;
+    }
+    let updated = if changed {
+        let value = serde_json::to_string(&anchor).map_err(|_| StoreError::Database)?;
+        let stored = if sensitive_setting(&key) {
+            vault.encrypt(&value)?
+        } else {
+            value.clone()
+        };
+        tx.execute(
+            "INSERT INTO settings(key,value) VALUES(?1,?2)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            rusqlite::params![key, stored],
+        )?;
+        Some(value)
+    } else {
+        None
+    };
+    tx.commit()?;
+    Ok((inserted, updated))
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct ClaimPlanRow {
     pub id: i64,

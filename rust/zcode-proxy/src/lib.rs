@@ -152,6 +152,10 @@ fn admin_api(state: Arc<AppState>) -> Router {
             get(account_billing::handle_reset_status),
         )
         .route(
+            "/api/accounts/:id/reset-history/sync",
+            post(account_billing::handle_reset_history_sync),
+        )
+        .route(
             "/api/accounts/:id/refresh",
             post(account_refresh::handle_refresh),
         )

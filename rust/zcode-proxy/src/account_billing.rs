@@ -861,6 +861,116 @@ pub async fn handle_reset_status(
     }
 }
 
+fn history_sync_response(synced: usize, throttled: bool, busy: bool) -> Response {
+    Json(json!({"ok":true,"upstream_synced":synced,"throttled":throttled,"busy":busy}))
+        .into_response()
+}
+
+fn commit_reset_history(
+    state: &AppState,
+    a: &Account,
+    latest: &[(&str, i64)],
+) -> Result<Option<usize>, store::StoreError> {
+    use rusqlite::OptionalExtension;
+
+    let mut db = state.db.lock().unwrap();
+    let accounts = state.accounts.lock().unwrap();
+    let mut settings = state.settings.lock().unwrap();
+    if !accounts
+        .iter()
+        .any(|current| current.id == a.id && current.zcode_jwt == a.jwt && current.api_key == a.key)
+    {
+        return Ok(None);
+    }
+    let credentials: Option<(String, String)> = db
+        .query_row(
+            "SELECT zcode_jwt,api_key FROM accounts WHERE id=?1",
+            [a.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((jwt, key)) = credentials else {
+        return Ok(None);
+    };
+    if state.vault.decrypt(&jwt)? != a.jwt || state.vault.decrypt(&key)? != a.key {
+        return Ok(None);
+    }
+    let (inserted, anchor) =
+        store::persist_reset_history(&mut db, &state.vault, a.id, &a.email, latest)?;
+    if let Some(anchor) = anchor {
+        settings.insert(format!("reset_history_seen:{}", a.id), anchor);
+    }
+    Ok(Some(inserted))
+}
+
+pub async fn handle_reset_history_sync(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let a = match account(&state, &id) {
+        Ok(a) => a,
+        Err(e) => return e.into_response(),
+    };
+    if !state.automation_inflight.lock().unwrap().insert(a.id) {
+        return history_sync_response(0, false, true);
+    }
+    let _flight = Flight {
+        state: &state,
+        id: a.id,
+    };
+    if a.jwt.is_empty() {
+        return history_sync_response(0, false, false);
+    }
+    if state
+        .reset_history_synced_at
+        .lock()
+        .unwrap()
+        .get(&a.id)
+        .is_some_and(|last| last.elapsed() < Duration::from_secs(600))
+    {
+        return history_sync_response(0, true, false);
+    }
+    let status = match reset_status(&state, &a).await {
+        Ok(status) => status,
+        Err(()) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "reset history retrieval failed",
+            )
+        }
+    };
+    let latest: Vec<_> = [
+        ("latest_five_hour_reset_history", "FIVE_HOUR"),
+        ("latest_week_reset_history", "WEEK"),
+    ]
+    .into_iter()
+    .filter_map(|(field, kind)| {
+        let used = status[field]["used_at"].as_i64().filter(|used| *used > 0)?;
+        let millis = if used > 100_000_000_000 {
+            used
+        } else {
+            used * 1000
+        };
+        Some((kind, millis))
+    })
+    .collect();
+    match commit_reset_history(&state, &a, &latest) {
+        Ok(Some(inserted)) => {
+            state
+                .reset_history_synced_at
+                .lock()
+                .unwrap()
+                .insert(a.id, std::time::Instant::now());
+            history_sync_response(inserted, false, false)
+        }
+        Ok(None) => history_sync_response(0, false, false),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "reset history persistence failed",
+        ),
+    }
+}
+
 pub async fn handle_reset(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     let a = match account(&state, &id) {
         Ok(a) => a,

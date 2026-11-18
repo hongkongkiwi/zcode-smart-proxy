@@ -155,6 +155,7 @@ pub struct AppState {
     pub automation: AutomationUrls,
     pub automation_solver: std::sync::Arc<dyn zcode_core::egress::CaptchaSolver>,
     pub(crate) automation_inflight: Mutex<std::collections::HashSet<i64>>,
+    pub(crate) reset_history_synced_at: Mutex<HashMap<i64, std::time::Instant>>,
     pub(crate) scheduler: Mutex<Option<std::sync::Weak<crate::scheduler::Scheduler>>>,
     background_refresh:
         Mutex<Option<std::sync::Weak<crate::background_refresh::BackgroundRefresh>>>,
@@ -308,6 +309,7 @@ impl AppState {
             automation: AutomationUrls::default(),
             automation_solver: std::sync::Arc::new(zcode_core::egress::NoopSolver),
             automation_inflight: Mutex::new(std::collections::HashSet::new()),
+            reset_history_synced_at: Mutex::new(HashMap::new()),
             scheduler: Mutex::new(None),
             background_refresh: Mutex::new(None),
             oauth: OAuthUrls::default(),
