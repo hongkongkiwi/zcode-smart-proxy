@@ -193,9 +193,11 @@ fixtures. These checks do not establish Go feature parity.
    verification parameter needs the headless Chrome flow, which is not ported.
    Off-peak availability probes eligible accounts in stored order and reports
    the first one that answers, without taking or settling a ticket. A failed
-   probe never echoes the account credentials. Still missing from the console:
-   highspeed status and account switch-back/restore-local. Those routes return
-   404 until ported.
+   probe never echoes the account credentials. Highspeed status reports whether
+   the lane is enabled and lists the z.ai accounts. It carries no card fields,
+   because those come from the draw flow, and this route never draws a card.
+   Still missing: account switch-back and restore-local, which write
+   credentials into a local ZCode install. Those two routes return 404.
 8. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.
 
