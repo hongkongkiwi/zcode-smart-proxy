@@ -212,19 +212,20 @@ pub fn now_secs() -> i64 {
 /// through untouched.
 async fn attempt_upstream(
     state: &AppState,
-    account_id: i64,
+    account_group: &str,
     url: &str,
     headers: Vec<(String, String)>,
     payload: &[u8],
     want_stream: bool,
     shape: Shape,
 ) -> Attempt {
-    let client = crate::egress::client_builder(state, Some(account_id)).and_then(|builder| {
-        builder
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| crate::store::StoreError::Vault)
-    });
+    let client =
+        crate::egress::client_builder_for_group(state, account_group).and_then(|builder| {
+            builder
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| crate::store::StoreError::Vault)
+        });
     let Ok(client) = client else {
         return Attempt::Written(
             error_response(
@@ -599,7 +600,7 @@ pub async fn handle_messages(
             let (url, _) = (endpoint_for(&state, phase), ());
             let out = attempt_upstream(
                 &state,
-                acct.id,
+                &acct.account_group,
                 &url,
                 auth_headers(creds, phase),
                 &payload,
@@ -673,7 +674,7 @@ pub async fn handle_messages(
                                 let url = endpoint_for(&state, CHANNEL_PAID);
                                 let out = attempt_upstream(
                                     &state,
-                                    acct.id,
+                                    &acct.account_group,
                                     &url,
                                     auth_headers(creds, CHANNEL_PAID),
                                     &payload,

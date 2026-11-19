@@ -192,7 +192,7 @@ fn validate_go_schema(db: &Connection) -> Result<(), ImportError> {
         ("accounts", "id,user_id,email,display_name,provider,auth_type,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority,access_token,refresh_token,user_info,device_mid,creds_raw,remark"),
         ("settings", "key,value,updated_at"),
         ("gateway_keys", "id,name,key_hash,enabled,models,rpm_limit,rate_5h,rate_1d,rate_7d,quota_total,quota_used"),
-        ("proxy_nodes", "password"),
+        ("proxy_nodes", "id,name,type,host,port,username,password,is_default,group_name,enabled,check_status,check_latency,check_ip,check_msg,check_at,created_at,updated_at"),
     ] {
         let kind: String = db.query_row("SELECT type FROM sqlite_schema WHERE name=?1", [table], |r| r.get(0))?;
         if kind != "table" { return Err(ImportError); }
@@ -254,6 +254,35 @@ fn project(
             r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, boolean(r,3)?, r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?, r.get::<_, i64>(8)?, r.get::<_, i64>(9)?, r.get::<_, i64>(10)?
         ])?;
     }
+    for node in store::list_proxy_nodes(source)? {
+        crate::egress::validate_node(&node.kind, &node.host, node.port)?;
+        let password = Zeroizing::new(source_vault.decrypt(&node.password)?);
+        tx.execute(
+            "INSERT INTO proxy_nodes(id,name,type,host,port,username,password,is_default,
+             group_name,enabled,check_status,check_latency,check_ip,check_msg,check_at,
+             created_at,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            params![
+                node.id,
+                node.name,
+                node.kind,
+                node.host,
+                node.port,
+                node.username,
+                runtime_vault.encrypt(&password)?,
+                node.is_default,
+                node.group_name,
+                node.enabled,
+                node.check_status,
+                node.check_latency,
+                node.check_ip,
+                node.check_msg,
+                node.check_at,
+                node.created_at,
+                node.updated_at
+            ],
+        )?;
+    }
     let settings = store::load_settings(source, source_vault)?;
     if let Some(proxy) = settings.get("upstream_proxy") {
         crate::egress::validate_proxy_url(proxy)?;
@@ -283,7 +312,7 @@ fn project(
         )?;
     }
     // Deleted IDs must not be reused, including history IDs whose projection is deferred.
-    for table in ["accounts", "gateway_keys", "usage_records"] {
+    for table in ["accounts", "gateway_keys", "usage_records", "proxy_nodes"] {
         let seq: Option<i64> = source
             .query_row(
                 "SELECT seq FROM sqlite_sequence WHERE name=?1",

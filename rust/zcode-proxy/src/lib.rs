@@ -24,6 +24,7 @@ pub mod install_sequence;
 pub mod openai_routes;
 mod openai_stream;
 mod plan_admin;
+mod proxy_admin;
 pub mod scheduler;
 pub mod state;
 pub mod store;
@@ -83,6 +84,14 @@ fn data_plane(state: Arc<AppState>) -> Router {
 fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
+        .route(
+            "/api/proxies",
+            get(proxy_admin::handle_list).post(proxy_admin::handle_create),
+        )
+        .route(
+            "/api/proxies/:id",
+            put(proxy_admin::handle_update).delete(proxy_admin::handle_delete),
+        )
         .route(
             "/api/plans",
             get(plan_admin::handle_list).post(plan_admin::handle_create),

@@ -59,6 +59,7 @@ pub fn has_ciphertext(conn: &Connection) -> Result<bool, StoreError> {
     for (table, query) in [
         ("accounts", "SELECT EXISTS(SELECT 1 FROM accounts WHERE substr(zcode_jwt,1,7) = 'vault1:' OR substr(api_key,1,7) = 'vault1:')"),
         ("settings", "SELECT EXISTS(SELECT 1 FROM settings WHERE substr(value,1,7) = 'vault1:')"),
+        ("proxy_nodes", "SELECT EXISTS(SELECT 1 FROM proxy_nodes WHERE substr(password,1,7) = 'vault1:')"),
     ] {
         let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if exists && conn.query_row(query, [], |r| r.get::<_, bool>(0))? { return Ok(true); }
@@ -136,6 +137,27 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
             quota_total INTEGER NOT NULL DEFAULT 0,
             quota_used INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS proxy_nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT DEFAULT '',
+            type TEXT DEFAULT 'socks5',
+            host TEXT DEFAULT '',
+            port INTEGER DEFAULT 0,
+            username TEXT DEFAULT '',
+            password TEXT DEFAULT '',
+            is_default INTEGER DEFAULT 0,
+            group_name TEXT DEFAULT '',
+            enabled INTEGER DEFAULT 1,
+            check_status TEXT DEFAULT '',
+            check_latency INTEGER DEFAULT 0,
+            check_ip TEXT DEFAULT '',
+            check_msg TEXT DEFAULT '',
+            check_at TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_nodes_default
+            ON proxy_nodes(is_default) WHERE is_default = 1;
         CREATE TABLE IF NOT EXISTS claim_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             plan_name TEXT NOT NULL DEFAULT '',
@@ -253,6 +275,64 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
     drop(stmt);
     tx.commit()?;
     Ok(())
+}
+
+pub(crate) struct ProxyNode {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub host: String,
+    pub port: i64,
+    pub username: String,
+    pub password: String,
+    pub is_default: bool,
+    pub group_name: String,
+    pub enabled: bool,
+    pub check_status: String,
+    pub check_latency: i64,
+    pub check_ip: String,
+    pub check_msg: String,
+    pub check_at: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub(crate) fn list_proxy_nodes(conn: &Connection) -> Result<Vec<ProxyNode>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT id,name,type,host,port,username,password,is_default,group_name,enabled,
+         check_status,check_latency,check_ip,check_msg,check_at,created_at,updated_at
+         FROM proxy_nodes ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let boolean = |column| {
+            let value: i64 = r.get(column)?;
+            match value {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(rusqlite::Error::IntegralValueOutOfRange(column, value)),
+            }
+        };
+        Ok(ProxyNode {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            kind: r.get(2)?,
+            host: r.get(3)?,
+            port: r.get(4)?,
+            username: r.get(5)?,
+            password: r.get(6)?,
+            is_default: boolean(7)?,
+            group_name: r.get(8)?,
+            enabled: boolean(9)?,
+            check_status: r.get(10)?,
+            check_latency: r.get(11)?,
+            check_ip: r.get(12)?,
+            check_msg: r.get(13)?,
+            check_at: r.get(14)?,
+            created_at: r.get(15)?,
+            updated_at: r.get(16)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub fn sensitive_setting(key: &str) -> bool {

@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 475 tests across 66 suites, and strict Clippy
+The current workspace run passes 506 tests across 69 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -148,10 +148,16 @@ fixtures. These checks do not establish Go feature parity.
    settings reads omit userinfo. Invalid configuration fails closed, including
    invalid proxy settings during offline Go import. Explicit direct mode ignores
    ambient proxy environment variables. Loopback HTTP proxy tests cover routing
-   and authentication. HTTPS CONNECT, HTTPS-proxy trust, and SOCKS transport still
-   need executable coverage. Group/default proxy nodes, browser CAPTCHA solving,
-   and fingerprinted TLS remain unfinished; their legacy traits are not working
-   integrations.
+   and authentication. Local CONNECT, trusted/untrusted HTTPS-proxy, and SOCKS
+   tests now exercise certificate verification and scoped proxy credentials.
+   Those tests require OpenSSL and Python 3. Group/default proxy nodes have
+   session-protected CRUD, encrypted password preservation, immediate routing,
+   and offline Go projection with IDs and metadata preserved. Selected broken
+   node credentials fail closed. Node hosts must be IP literals or RFC1123
+   hostnames; legacy underscore/Unicode hosts need correction before import.
+   Inference uses the captured request-start account group so account deletion
+   does not break an in-flight fallback. Proxy probes/system discovery, browser
+   CAPTCHA solving, and fingerprinted TLS remain unfinished.
 7. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.
 
