@@ -37,7 +37,7 @@ pub(crate) fn validate_node(kind: &str, host: &str, port: i64) -> Result<(), Sto
     Ok(())
 }
 
-fn node_url(node: &store::ProxyNode, state: &AppState) -> Result<String, StoreError> {
+pub(crate) fn node_url(node: &store::ProxyNode, state: &AppState) -> Result<String, StoreError> {
     validate_node(&node.kind, &node.host, node.port)?;
     // Decrypt even without a username: a selected broken credential never changes routing.
     let password = zeroize::Zeroizing::new(state.vault.decrypt(&node.password)?);
@@ -179,7 +179,9 @@ pub(crate) fn client_builder_for_group(
     builder_with_proxy(resolve_group_proxy(state, &db, group)?)
 }
 
-fn builder_with_proxy(value: Option<String>) -> Result<reqwest::ClientBuilder, StoreError> {
+pub(crate) fn builder_with_proxy(
+    value: Option<String>,
+) -> Result<reqwest::ClientBuilder, StoreError> {
     let mut builder = reqwest::Client::builder()
         .no_proxy()
         .min_tls_version(reqwest::tls::Version::TLS_1_2);

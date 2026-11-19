@@ -22,11 +22,13 @@ pub mod go_compat;
 pub mod go_import;
 pub mod identity;
 pub mod install_sequence;
+mod model_catalog;
 pub mod openai_routes;
 mod openai_stream;
 pub mod passkey;
 mod plan_admin;
 mod proxy_admin;
+pub mod proxy_diagnostics;
 pub mod scheduler;
 pub mod state;
 pub mod store;
@@ -93,6 +95,19 @@ fn admin_api(state: Arc<AppState>) -> Router {
         .route(
             "/api/proxies/:id",
             put(proxy_admin::handle_update).delete(proxy_admin::handle_delete),
+        )
+        .route("/api/proxies/system", get(proxy_diagnostics::handle_system))
+        .route(
+            "/api/proxies/probe-ports",
+            get(proxy_diagnostics::handle_probe_ports),
+        )
+        .route(
+            "/api/proxies/test-url",
+            post(proxy_diagnostics::handle_test_url),
+        )
+        .route(
+            "/api/proxies/:id/test",
+            post(proxy_diagnostics::handle_test_node),
         )
         .route(
             "/api/plans",
@@ -221,6 +236,8 @@ fn admin_api(state: Arc<AppState>) -> Router {
         .route("/api/groups", get(console::handle_groups))
         .route("/api/fingerprints", get(console::handle_fingerprints))
         .route("/api/models", get(console::handle_models))
+        .route("/api/models/catalog", get(model_catalog::handle_catalog))
+        .route("/api/models/sync", post(model_catalog::handle_sync))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin::require_session_mw,
