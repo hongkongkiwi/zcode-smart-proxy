@@ -256,8 +256,17 @@ pub async fn handle_account_enabled(
 /// POST /api/auth/password — change the admin password (current required).
 pub async fn handle_password_change(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     body: String,
 ) -> Response {
+    let client = peer
+        .map(|axum::Extension(axum::extract::ConnectInfo(addr))| addr.ip().to_string())
+        .unwrap_or_else(|| "local".into());
+    let rate_key = format!("{client}|password-change");
+    let mut guard = state.step_up_guard.lock().unwrap();
+    if guard.check(&rate_key, crate::auth::now_secs()) > 0 {
+        return err(StatusCode::TOO_MANY_REQUESTS, "too many attempts");
+    }
     let v: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => return err(StatusCode::BAD_REQUEST, "body is not valid JSON"),
@@ -276,13 +285,16 @@ pub async fn handle_password_change(
             "new password must be at least 8 characters",
         );
     }
-    let hash = state.setting("admin_password_hash");
-    let current_ok = match &hash {
+    let mut db = state.db.lock().unwrap();
+    let mut settings = state.settings.lock().unwrap();
+    let hash = settings.get("admin_password_hash");
+    let current_ok = match hash {
         Some(h) if !h.is_empty() => bcrypt::verify(current, h).unwrap_or(false),
         None => true, // first-time bootstrap: no password set yet
         _ => false,
     };
     if !current_ok {
+        guard.record_failure(&rate_key, crate::auth::now_secs());
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"message": "current password is incorrect"})),
@@ -291,7 +303,11 @@ pub async fn handle_password_change(
     }
     let new_hash = bcrypt::hash(new_pw, bcrypt::DEFAULT_COST).unwrap();
     if state
-        .persist_settings(&[("admin_password_hash", &new_hash)])
+        .persist_settings_locked(
+            &mut db,
+            &mut settings,
+            &[("admin_password_hash", &new_hash)],
+        )
         .is_err()
     {
         return err(
@@ -299,6 +315,7 @@ pub async fn handle_password_change(
             "storage operation failed",
         );
     }
+    guard.clear(&rate_key);
     // Restart revokes sessions (Go parity).
     state.sessions.lock().unwrap().clear();
     (StatusCode::OK, Json(json!({"ok": true}))).into_response()

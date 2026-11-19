@@ -186,6 +186,9 @@ pub struct AppState {
     pub login_guard: Mutex<crate::admin::LoginGuard>,
     /// Step-up failures use peer/action buckets independent of login lockout.
     pub(crate) step_up_guard: Mutex<crate::admin::LoginGuard>,
+    pub passkey_ticket_ttl: std::time::Duration,
+    pub(crate) webauthn_rp: Mutex<Option<crate::passkey::RpConfig>>,
+    pub(crate) passkey_flows: Mutex<crate::passkey::FlowStore>,
     /// Rolling in-memory usage log (parity with recordUsage for E2E checks).
     pub usage: Mutex<Vec<UsageRecord>>,
 }
@@ -357,6 +360,9 @@ impl AppState {
             sessions: Mutex::new(HashMap::new()),
             login_guard: Mutex::new(crate::admin::LoginGuard::default()),
             step_up_guard: Mutex::new(crate::admin::LoginGuard::default()),
+            passkey_ticket_ttl: std::time::Duration::from_secs(300),
+            webauthn_rp: Mutex::new(None),
+            passkey_flows: Mutex::new(crate::passkey::FlowStore::default()),
             usage: Mutex::new(Vec::new()),
         })
     }

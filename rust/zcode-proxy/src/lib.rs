@@ -23,6 +23,7 @@ pub mod identity;
 pub mod install_sequence;
 pub mod openai_routes;
 mod openai_stream;
+pub mod passkey;
 mod plan_admin;
 mod proxy_admin;
 pub mod scheduler;
@@ -190,6 +191,16 @@ fn admin_api(state: Arc<AppState>) -> Router {
             post(account_local::handle_import),
         )
         .route("/api/auth/check", get(admin::handle_check))
+        .route("/api/auth/passkey/status", get(passkey::handle_status))
+        .route(
+            "/api/auth/passkey/register/begin",
+            post(passkey::handle_register_begin),
+        )
+        .route(
+            "/api/auth/passkey/register/finish",
+            post(passkey::handle_register_finish),
+        )
+        .route("/api/auth/passkey/delete", post(passkey::handle_delete))
         .route("/api/auth/totp/setup", post(admin::handle_totp_setup))
         .route("/api/auth/totp/confirm", post(admin::handle_totp_confirm))
         .route("/api/auth/totp/disable", post(admin::handle_totp_disable))
@@ -204,6 +215,15 @@ fn admin_api(state: Arc<AppState>) -> Router {
 fn open_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/login", post(admin::handle_login))
+        .route(
+            "/api/login/passkey/begin",
+            post(passkey::handle_login_begin),
+        )
+        .route(
+            "/api/login/passkey/finish",
+            post(passkey::handle_login_finish),
+        )
+        .route("/api/login/totp", post(passkey::handle_login_totp))
         .route("/oauth/callback", get(account_oauth::handle_callback))
         .route("/web", get(admin::handle_panel))
         .route("/health", get(|| async { "ok" }))

@@ -27,8 +27,12 @@ rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 tower = { version = "0.5", features = ["util"] }
 zcode-core = { path = "../zcode-core" }
 zeroize = "1"
+webauthn-rs-core = "0.6.2"
+serde_cbor_2 = "0.13"
+url = "2"
 
 [dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa"] }
 bcrypt = "0.15"
 rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }

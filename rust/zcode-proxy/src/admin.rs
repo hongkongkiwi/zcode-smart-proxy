@@ -36,7 +36,7 @@ const LOCKOUT_THRESHOLD: usize = 5;
 const LOCKOUT_WINDOW_SECS: i64 = 900;
 
 /// Require a serialized HTTP(S) origin whose authority matches Host, including port.
-fn origin_allowed(headers: &axum::http::HeaderMap) -> bool {
+pub(crate) fn origin_allowed(headers: &axum::http::HeaderMap) -> bool {
     let mut origins = headers.get_all("origin").iter();
     let Some(origin) = origins.next() else {
         return true;
@@ -115,11 +115,26 @@ fn token() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn password_ok(hash: Option<String>, password: &str) -> bool {
+pub(crate) fn password_ok(hash: Option<String>, password: &str) -> bool {
     match hash {
         Some(h) if !h.is_empty() => bcrypt::verify(password, &h).unwrap_or(false),
         _ => false,
     }
+}
+
+pub(crate) fn totp_code_ok(secret_b32: &str, code: &str) -> bool {
+    let unpadded = secret_b32.trim_end_matches('=');
+    if !unpadded
+        .bytes()
+        .all(|b| b.is_ascii_alphabetic() || (b'2'..=b'7').contains(&b))
+    {
+        return false;
+    }
+    zcode_core::base32_decode(secret_b32).is_some_and(|secret| {
+        secret.len() >= 16
+            && zcode_core::base32_encode(&secret).eq_ignore_ascii_case(unpadded)
+            && zcode_core::totp_verify(&secret, now_secs(), code)
+    })
 }
 
 pub async fn handle_login(
@@ -154,7 +169,7 @@ pub async fn handle_login(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     let hash = state.setting("admin_password_hash");
-    if !password_ok(hash, password) {
+    if !password_ok(hash.clone(), password) {
         state
             .login_guard
             .lock()
@@ -166,6 +181,18 @@ pub async fn handle_login(
         )
             .into_response();
     }
+    match crate::passkey::enrolled(&state.setting("passkey_credentials").unwrap_or_default()) {
+        Ok(true) => {
+            return crate::passkey::stage_login(&state, &client, hash.as_deref().unwrap_or(""))
+        }
+        Err(()) => {
+            return crate::passkey::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "authentication storage operation failed",
+            )
+        }
+        Ok(false) => (),
+    }
     // Second factor: when a TOTP secret is enrolled+enabled, the login body
     // must carry a current TOTP code or an unused recovery code (single-use,
     // consumed on success). Missing/invalid = 401, same shape as above.
@@ -176,9 +203,7 @@ pub async fn handle_login(
             .unwrap_or("");
         let mut second_ok = false;
         if let Some(secret_b32) = state.setting("totp_secret") {
-            if let Some(secret) = zcode_core::base32_decode(&secret_b32) {
-                second_ok = zcode_core::totp_verify(&secret, now_secs(), code);
-            }
+            second_ok = totp_code_ok(&secret_b32, code);
         }
         if !second_ok {
             second_ok = match state.consume_recovery_code(code) {
@@ -200,17 +225,40 @@ pub async fn handle_login(
         }
     }
     state.login_guard.lock().unwrap().clear(&client);
+    let _db = state.db.lock().unwrap();
+    let settings = state.settings.lock().unwrap();
+    if settings.get("admin_password_hash") != hash.as_ref() {
+        return crate::passkey::error(StatusCode::UNAUTHORIZED, "invalid credentials");
+    }
+    match crate::passkey::enrolled(
+        settings
+            .get("passkey_credentials")
+            .map(String::as_str)
+            .unwrap_or(""),
+    ) {
+        Ok(false) => login_success(&state, "admin"),
+        Ok(true) => crate::passkey::error(
+            StatusCode::UNAUTHORIZED,
+            "authentication changed, start again",
+        ),
+        Err(()) => crate::passkey::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authentication storage operation failed",
+        ),
+    }
+}
+
+pub(crate) fn login_success(state: &AppState, username: &str) -> Response {
     let t = token();
     state
         .sessions
         .lock()
         .unwrap()
         .insert(t.clone(), now_secs() + SESSION_TTL_SECS);
-    let mut resp = (
+    let mut resp = crate::passkey::reply(
         StatusCode::OK,
-        Json(json!({"success": true, "username": "admin"})),
-    )
-        .into_response();
+        json!({"success": true, "username": username}),
+    );
     resp.headers_mut().insert(
         "set-cookie",
         format!(
@@ -281,6 +329,9 @@ pub async fn require_session_mw(
         })
         .unwrap_or(false);
     if !ok {
+        if req.uri().path().starts_with("/api/auth/passkey/") {
+            return crate::passkey::error(StatusCode::UNAUTHORIZED, "unauthorized");
+        }
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": {"message": "unauthorized", "type": "api_error"}})),
@@ -290,7 +341,8 @@ pub async fn require_session_mw(
     if !matches!(
         *req.method(),
         axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
-    ) && !origin_allowed(req.headers())
+    ) && !req.uri().path().starts_with("/api/auth/passkey/")
+        && !origin_allowed(req.headers())
     {
         return (
             StatusCode::FORBIDDEN,
@@ -623,8 +675,7 @@ pub async fn handle_totp_confirm(
         )
             .into_response();
     };
-    let valid = zcode_core::base32_decode(&secret_b32)
-        .is_some_and(|secret| zcode_core::totp_verify(&secret, now, code));
+    let valid = totp_code_ok(&secret_b32, code);
     if !valid {
         guard.record_failure(&rate_key, now_secs());
         return (
@@ -712,12 +763,16 @@ pub async fn handle_totp_disable(
     }
     let totp_valid = settings
         .get("totp_secret")
-        .and_then(|secret| zcode_core::base32_decode(secret))
-        .is_some_and(|secret| zcode_core::totp_verify(&secret, now_secs(), code));
+        .is_some_and(|secret| totp_code_ok(secret, code));
     let recovery =
         zcode_core::recovery_codes_from_json(settings.get("recovery_codes").map(String::as_str));
-    // Validate without consuming: proof and all secret cleanup commit together.
-    if !totp_valid && zcode_core::consume_recovery_code(&recovery, code).is_none() {
+    let remaining = if totp_valid {
+        None
+    } else {
+        zcode_core::consume_recovery_code(&recovery, code)
+    };
+    // The recovery proof and TOTP cleanup commit together, retaining passkey fallback.
+    if !totp_valid && remaining.is_none() {
         guard.record_failure(&rate_key, now_secs());
         return (
             StatusCode::BAD_REQUEST,
@@ -725,6 +780,20 @@ pub async fn handle_totp_disable(
         )
             .into_response();
     }
+    let has_passkeys = match crate::passkey::enrolled(
+        settings
+            .get("passkey_credentials")
+            .map(String::as_str)
+            .unwrap_or(""),
+    ) {
+        Ok(enrolled) => enrolled,
+        Err(()) => return storage_error(),
+    };
+    let recovery = if has_passkeys {
+        zcode_core::recovery_codes_to_json(remaining.as_deref().unwrap_or(&recovery))
+    } else {
+        String::new()
+    };
     if state
         .persist_settings_locked(
             &mut db,
@@ -732,7 +801,7 @@ pub async fn handle_totp_disable(
             &[
                 ("totp_enabled", ""),
                 ("totp_secret", ""),
-                ("recovery_codes", ""),
+                ("recovery_codes", &recovery),
                 ("totp_secret_pending", ""),
                 ("totp_setup_expires_at", ""),
             ],

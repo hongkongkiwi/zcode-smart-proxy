@@ -40,6 +40,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vault = zcode_proxy::vault::Vault::for_database(&db_path)?;
     let db = zcode_proxy::store::try_open(&db_path)?;
     let mut state = AppState::try_from_db_with_vault(root_key, upstream, db, vault)?;
+    match (
+        std::env::var("ZCODE_WEB_RPID"),
+        std::env::var("ZCODE_WEB_ORIGIN"),
+    ) {
+        (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => (),
+        (Ok(rp_id), Ok(origins)) => state.set_webauthn_rp(zcode_proxy::passkey::RpConfig {
+            rp_id,
+            origins: origins
+                .split(',')
+                .map(|origin| origin.trim().to_owned())
+                .collect(),
+        })?,
+        _ => return Err("set both ZCODE_WEB_RPID and ZCODE_WEB_ORIGIN to valid values".into()),
+    }
     state.install_reporting_enabled = true;
     zcode_proxy::identity::backfill_device_identities(&state)?;
     // The bootstrap environment must not overwrite a rotated stored password.

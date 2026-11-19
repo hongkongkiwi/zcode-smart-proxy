@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 506 tests across 69 suites, and strict Clippy
+The current workspace run passes 530 tests across 71 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -107,6 +107,21 @@ fixtures. These checks do not establish Go feature parity.
    confirmation now requires the current password and a pending setup less than
    ten minutes old. Confirmation and disable have separate peer/action throttles;
    disable requires both password and an active factor or recovery proof.
+   Disabling TOTP while passkeys remain enrolled keeps the passkey recovery
+   codes and consumes only the presented proof. A shared validator rejects
+   empty, malformed, and non-canonical TOTP secrets on every path.
+   Passkeys use a real WebAuthn ceremony (`webauthn-rs-core`), parse Go's stored
+   COSE credentials, enforce the configured RP ID and origins, and persist the
+   signature counter and user-verification latch before issuing a session
+   cookie. An omitted Go `signCount` is read as zero; malformed present values
+   fail closed. Login is password-first and stages a second-factor ticket only
+   when passkeys are enrolled. Ordinary same-Host administration keeps the
+   existing Origin policy; only the ceremonies require the configured origins.
+   Password changes now check the peer/action throttle before bcrypt and block
+   after five failures. RP configuration comes from the environment only.
+   Remaining gaps: attestation trust-chain evaluation is not implemented,
+   the cross-origin flag is unverified in a real browser, the panel has no 2FA
+   management UI yet, and the session cookie does not yet set `Secure`.
 4. Broader OpenAI compatibility coverage beyond the current streaming tests,
    plus async ticket and highspeed-card workflows.
 5. Manual billing routes cover preview and claim, Start Plan activation events
