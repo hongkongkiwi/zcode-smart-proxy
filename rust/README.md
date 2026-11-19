@@ -191,8 +191,11 @@ fixtures. These checks do not establish Go feature parity.
    invalidation, and the per-proxy parameter cache are implemented, including
    the 60 second failure cooldown. Solving still fails closed: producing a
    verification parameter needs the headless Chrome flow, which is not ported.
-   Still missing from the console: off-peak availability, highspeed status,
-   and account switch-back/restore-local. Those routes return 404 until ported.
+   Off-peak availability probes eligible accounts in stored order and reports
+   the first one that answers, without taking or settling a ticket. A failed
+   probe never echoes the account credentials. Still missing from the console:
+   highspeed status and account switch-back/restore-local. Those routes return
+   404 until ported.
 8. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.
 

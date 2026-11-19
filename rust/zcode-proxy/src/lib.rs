@@ -24,6 +24,7 @@ pub mod go_import;
 pub mod identity;
 pub mod install_sequence;
 mod model_catalog;
+mod offpeak;
 pub mod openai_routes;
 mod openai_stream;
 pub mod passkey;
@@ -89,6 +90,10 @@ fn data_plane(state: Arc<AppState>) -> Router {
 fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
+        .route(
+            "/api/offpeak/availability",
+            get(offpeak::handle_availability),
+        )
         .route("/api/captcha/status", get(captcha::handle_status))
         .route("/api/captcha/invalidate", post(captcha::handle_invalidate))
         .route("/api/captcha/solve", post(captcha::handle_solve))
