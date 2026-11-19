@@ -12,6 +12,7 @@ pub mod admin;
 pub mod auth;
 pub mod autoreset;
 pub mod background_refresh;
+pub mod console;
 mod cron;
 mod desktop_credentials;
 pub mod egress;
@@ -203,7 +204,23 @@ fn admin_api(state: Arc<AppState>) -> Router {
         .route("/api/auth/passkey/delete", post(passkey::handle_delete))
         .route("/api/auth/totp/setup", post(admin::handle_totp_setup))
         .route("/api/auth/totp/confirm", post(admin::handle_totp_confirm))
+        .route("/api/auth/totp/enable", post(admin::handle_totp_confirm))
+        .route("/api/auth/totp/status", get(console::handle_totp_status))
         .route("/api/auth/totp/disable", post(admin::handle_totp_disable))
+        .route("/api/auth/username", post(console::handle_username_change))
+        .route("/api/settings/api-key", get(console::handle_get_api_key))
+        .route(
+            "/api/settings/api-key/reveal",
+            post(console::handle_reveal_api_key),
+        )
+        .route(
+            "/api/settings/api-key/generate",
+            post(console::handle_generate_api_key),
+        )
+        .route("/api/dashboard", get(console::handle_dashboard))
+        .route("/api/groups", get(console::handle_groups))
+        .route("/api/fingerprints", get(console::handle_fingerprints))
+        .route("/api/models", get(console::handle_models))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin::require_session_mw,
@@ -215,6 +232,7 @@ fn admin_api(state: Arc<AppState>) -> Router {
 fn open_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/login", post(admin::handle_login))
+        .route("/api/auth/login-info", get(console::handle_login_info))
         .route(
             "/api/login/passkey/begin",
             post(passkey::handle_login_begin),
@@ -225,7 +243,10 @@ fn open_routes(state: Arc<AppState>) -> Router {
         )
         .route("/api/login/totp", post(passkey::handle_login_totp))
         .route("/oauth/callback", get(account_oauth::handle_callback))
-        .route("/web", get(admin::handle_panel))
+        .route("/web", get(console::handle_index))
+        .route("/web/", get(console::handle_index))
+        .route("/web/static/:name", get(console::handle_static))
+        .route("/web/*path", get(console::handle_web_path))
         .route("/health", get(|| async { "ok" }))
         .with_state(state)
 }
@@ -235,4 +256,5 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     data_plane(state.clone())
         .merge(admin_api(state.clone()))
         .merge(open_routes(state))
+        .layer(middleware::from_fn(admin::no_store_mw))
 }

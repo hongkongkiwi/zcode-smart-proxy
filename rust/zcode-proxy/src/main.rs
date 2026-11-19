@@ -33,13 +33,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", serde_json::to_string(&report)?);
         return Ok(());
     }
-    let root_key = std::env::var("ZCODE_RS_ROOT_KEY").unwrap_or_default();
+    let env_root_key = std::env::var("ZCODE_RS_ROOT_KEY").unwrap_or_default();
     let upstream = AppState::upstream_from_env();
     let bind = std::env::var("ZCODE_RS_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
     let db_path = std::env::var("ZCODE_RS_DB").unwrap_or_else(|_| "zcode-rs.db".into());
     let vault = zcode_proxy::vault::Vault::for_database(&db_path)?;
     let db = zcode_proxy::store::try_open(&db_path)?;
-    let mut state = AppState::try_from_db_with_vault(root_key, upstream, db, vault)?;
+    let mut state = AppState::try_from_db_with_vault(env_root_key.clone(), upstream, db, vault)?;
+    // A persisted rotation already wins inside the constructor; the
+    // environment only seeds a database that has none.
+    let stored_root_key = state.setting("api_key").unwrap_or_default();
+    if stored_root_key.is_empty() && !env_root_key.is_empty() {
+        state.rotate_root_key(&env_root_key)?;
+    }
     match (
         std::env::var("ZCODE_WEB_RPID"),
         std::env::var("ZCODE_WEB_ORIGIN"),
@@ -61,7 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(pw) = std::env::var("ZCODE_RS_ADMIN_PASSWORD") {
             if !pw.is_empty() {
                 let hash = bcrypt::hash(&pw, bcrypt::DEFAULT_COST)?;
-                state.persist_settings(&[("admin_password_hash", &hash)])?;
+                state.persist_settings(&[
+                    ("admin_password_hash", &hash),
+                    ("admin_password_default", "1"),
+                ])?;
             }
         }
     }

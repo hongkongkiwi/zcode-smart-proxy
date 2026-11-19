@@ -28,6 +28,21 @@ fn storage_error() -> Response {
         .into_response()
 }
 
+/// API responses must not be cached (Go writeJSON parity). Applies to every
+/// /api path, including middleware-generated 401s; streaming and asset routes
+/// keep their own policy.
+pub(crate) async fn no_store_mw(req: Request<Body>, next: Next) -> Response {
+    let is_api = req.uri().path().starts_with("/api/");
+    let mut response = next.run(req).await;
+    if is_api && !response.headers().contains_key("cache-control") {
+        response.headers_mut().insert(
+            "cache-control",
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+    }
+    response
+}
+
 /// Login lockout (Go auth.go parity): after LOCKOUT_THRESHOLD failures from
 /// one client within the window, further attempts are rejected until the
 /// window lapses. Bounded per-client state; stale clients are pruned when
@@ -122,6 +137,13 @@ pub(crate) fn password_ok(hash: Option<String>, password: &str) -> bool {
     }
 }
 
+pub(crate) fn admin_username(state: &AppState) -> String {
+    state
+        .setting("admin_username")
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "admin".into())
+}
+
 pub(crate) fn totp_code_ok(secret_b32: &str, code: &str) -> bool {
     let unpadded = secret_b32.trim_end_matches('=');
     if !unpadded
@@ -168,6 +190,25 @@ pub async fn handle_login(
         .get("password")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
+    // API clients may omit the username; a supplied one must match the admin.
+    let provided_username = v
+        .get("username")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.is_empty());
+    if let Some(name) = provided_username {
+        if name != admin_username(&state).as_str() {
+            state
+                .login_guard
+                .lock()
+                .unwrap()
+                .record_failure(&client, now_secs());
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "message": "invalid credentials"})),
+            )
+                .into_response();
+        }
+    }
     let hash = state.setting("admin_password_hash");
     if !password_ok(hash.clone(), password) {
         state
@@ -193,9 +234,15 @@ pub async fn handle_login(
         }
         Ok(false) => (),
     }
+    // The console omits the code and expects a challenge; a supplied code
+    // keeps the legacy inline verification below.
+    if state.setting("totp_enabled").as_deref() == Some("1") && v.get("code").is_none() {
+        return crate::passkey::stage_login(&state, &client, hash.as_deref().unwrap_or(""));
+    }
     // Second factor: when a TOTP secret is enrolled+enabled, the login body
     // must carry a current TOTP code or an unused recovery code (single-use,
     // consumed on success). Missing/invalid = 401, same shape as above.
+    let mut second_factor_verified = false;
     if state.setting("totp_enabled").as_deref() == Some("1") {
         let code = v
             .get("code")
@@ -223,6 +270,7 @@ pub async fn handle_login(
             )
                 .into_response();
         }
+        second_factor_verified = true;
     }
     state.login_guard.lock().unwrap().clear(&client);
     let _db = state.db.lock().unwrap();
@@ -230,13 +278,27 @@ pub async fn handle_login(
     if settings.get("admin_password_hash") != hash.as_ref() {
         return crate::passkey::error(StatusCode::UNAUTHORIZED, "invalid credentials");
     }
+    // A concurrent TOTP enable must not let an unverified single-factor
+    // request through to a session.
+    if settings.get("totp_enabled").map(String::as_str) == Some("1") && !second_factor_verified {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"success": false, "message": "second factor required"})),
+        )
+            .into_response();
+    }
+    let username = settings
+        .get("admin_username")
+        .filter(|name| !name.is_empty())
+        .cloned()
+        .unwrap_or_else(|| "admin".into());
     match crate::passkey::enrolled(
         settings
             .get("passkey_credentials")
             .map(String::as_str)
             .unwrap_or(""),
     ) {
-        Ok(false) => login_success(&state, "admin"),
+        Ok(false) => login_success(&state, &username),
         Ok(true) => crate::passkey::error(
             StatusCode::UNAUTHORIZED,
             "authentication changed, start again",
@@ -295,7 +357,19 @@ pub async fn handle_check(
     let ok = session_token(&headers)
         .map(|t| state.sessions.lock().unwrap().contains_key(&t))
         .unwrap_or(false);
-    (StatusCode::OK, Json(json!({"authenticated": ok}))).into_response()
+    if !ok {
+        return (StatusCode::OK, Json(json!({"authenticated": false}))).into_response();
+    }
+    let is_default = state.setting("admin_password_default").as_deref() == Some("1");
+    (
+        StatusCode::OK,
+        Json(json!({
+            "authenticated": true,
+            "username": admin_username(&state),
+            "is_default_password": is_default,
+        })),
+    )
+        .into_response()
 }
 
 pub fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
@@ -509,31 +583,34 @@ pub async fn handle_usage(
     (StatusCode::OK, Json(json!({"records": list}))).into_response()
 }
 
-pub async fn handle_stats(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-) -> Response {
-    let accounts = state.accounts.lock().unwrap().len();
-    let active = state
-        .accounts
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|a| a.status == "active" && a.enabled)
-        .count();
+/// Shared stats payload for /api/stats and the dashboard's usage_7d.
+pub(crate) fn stats_json(state: &AppState) -> serde_json::Value {
+    let (accounts, active) = {
+        let accounts = state.accounts.lock().unwrap();
+        (
+            accounts.len(),
+            accounts
+                .iter()
+                .filter(|a| a.status == "active" && a.enabled)
+                .count(),
+        )
+    };
     let keys = state.named_keys.lock().unwrap().len();
     let usage_rows = {
         let db = state.db.lock().unwrap();
         store::list_usage(&db, 1000)
     };
     let total_charge: i64 = usage_rows.iter().map(|r| r.4).sum();
-    (
-        StatusCode::OK,
-        Json(json!({
-            "accounts": accounts, "active_accounts": active,
-            "gateway_keys": keys, "total_quota_charge": total_charge,
-        })),
-    )
-        .into_response()
+    json!({
+        "accounts": accounts, "active_accounts": active,
+        "gateway_keys": keys, "total_quota_charge": total_charge,
+    })
+}
+
+pub async fn handle_stats(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Response {
+    (StatusCode::OK, Json(stats_json(&state))).into_response()
 }
 
 /// Publish memory mirrors only after the usage row and key debit commit.

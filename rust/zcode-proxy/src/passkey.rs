@@ -336,7 +336,10 @@ pub(crate) fn stage_login(state: &AppState, peer: &str, verified_hash: &str) -> 
         );
     }
     let token = random_token::<32>();
-    let mut methods = vec!["passkey"];
+    let mut methods = Vec::new();
+    if enrolled(&snapshot.credentials).unwrap_or(false) {
+        methods.push("passkey");
+    }
     if settings.get("totp_enabled").map(String::as_str) == Some("1") {
         methods.push("totp");
     }

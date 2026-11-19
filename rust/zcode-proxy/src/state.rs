@@ -1,7 +1,7 @@
 //! Shared service state for the Rust data plane.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use crate::store;
 use zcode_core::{AccountView, GwRpmTracker, GwWindowTracker, Selector, StrategyConfig};
@@ -146,8 +146,10 @@ impl Default for StreamTimings {
 }
 
 pub struct AppState {
-    /// Root key plaintext (empty = named keys only).
+    /// Constructor seed only; the authoritative value is behind `root_key()`.
     pub root_key: String,
+    root_key_live: RwLock<String>,
+    root_key_publication: Mutex<RootKeyPublication>,
     pub upstream: UpstreamUrls,
     pub management: ManagementUrls,
     pub install_urls: crate::install_sequence::InstallUrls,
@@ -194,6 +196,14 @@ pub struct AppState {
 }
 
 pub const MAX_MEMORY_USAGE_RECORDS: usize = 1024;
+
+/// Serializes root-key reads and writes so publication order matches commit order.
+struct RootKeyPublication {
+    last_success: std::time::Instant,
+}
+
+/// A rotated root key reaches other instances within this window.
+const ROOT_KEY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct UsageRecord {
@@ -326,8 +336,17 @@ impl AppState {
             .into_iter()
             .map(|row| row.key)
             .collect();
+        // A persisted rotation wins; the constructor argument is only a seed.
+        let live_root_key = match settings.get("api_key") {
+            Some(value) if !value.is_empty() => value.clone(),
+            _ => root_key.clone(),
+        };
         Ok(Self {
-            root_key,
+            root_key: root_key.clone(),
+            root_key_live: RwLock::new(live_root_key),
+            root_key_publication: Mutex::new(RootKeyPublication {
+                last_success: std::time::Instant::now(),
+            }),
             upstream,
             management: ManagementUrls::default(),
             install_urls: crate::install_sequence::InstallUrls::default(),
@@ -419,5 +438,50 @@ impl AppState {
 
     pub fn setting(&self, key: &str) -> Option<String> {
         self.settings.lock().unwrap().get(key).cloned()
+    }
+
+    /// Current root key plaintext (empty = named keys only).
+    pub fn root_key(&self) -> String {
+        self.root_key_live.read().unwrap().clone()
+    }
+
+    /// Publish a rotated root key after its durable write succeeds.
+    pub fn set_root_key(&self, key: String) {
+        *self.root_key_live.write().unwrap() = key;
+    }
+
+    /// Persist and publish a rotated root key under the publication lock, so a
+    /// concurrent refresh cannot publish an older snapshot after this commit.
+    pub fn rotate_root_key(&self, key: &str) -> Result<(), store::StoreError> {
+        let mut publication = self.root_key_publication.lock().unwrap();
+        self.persist_settings(&[("api_key", key)])?;
+        self.set_root_key(key.to_owned());
+        publication.last_success = std::time::Instant::now();
+        Ok(())
+    }
+
+    /// A rotated key stops authenticating within one second on every instance sharing the database; an unreadable stored key fails root-key authentication closed.
+    pub fn refresh_root_key(&self) -> bool {
+        let mut publication = self.root_key_publication.lock().unwrap();
+        if publication.last_success.elapsed() < ROOT_KEY_REFRESH_INTERVAL {
+            return true;
+        }
+        let stored = {
+            let db = self.db.lock().unwrap();
+            crate::store::load_setting(&db, &self.vault, "api_key")
+        };
+        let Ok(stored) = stored else {
+            return false;
+        };
+        let stored = stored.unwrap_or_default();
+        if !stored.is_empty() && stored != self.root_key() {
+            self.settings
+                .lock()
+                .unwrap()
+                .insert("api_key".into(), stored.clone());
+            self.set_root_key(stored);
+        }
+        publication.last_success = std::time::Instant::now();
+        true
     }
 }

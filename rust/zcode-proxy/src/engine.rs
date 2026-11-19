@@ -17,6 +17,44 @@ use crate::state::{AppState, Creds, UsageRecord};
 pub const CHANNEL_FREE: &str = "free";
 pub const CHANNEL_PAID: &str = "paid";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Default data-plane catalog; the console reads the same list.
+pub const MODEL_IDS: &[&str] = &[
+    "GLM-5.3",
+    "GLM-5.3-Flash",
+    "GLM-5.2",
+    "GLM-5.1",
+    "GLM-5",
+    "GLM-5-Turbo",
+    "GLM-5V-Turbo",
+    "GLM-5.1-Highspeed",
+];
+
+/// Preset table copied from the Go server (tls_fingerprint.go); the console
+/// dropdown depends on the exact ids, labels and groups.
+pub const TLS_FINGERPRINT_PRESETS: &[(&str, &str, &str)] = &[
+    ("off", "关闭（Go 默认指纹）", "基础"),
+    ("randomized", "随机化指纹", "基础"),
+    ("chrome", "Chrome 浏览器（自动最新）", "浏览器"),
+    ("chrome_100", "Chrome 100", "浏览器"),
+    ("chrome_83", "Chrome 83（旧版 Electron 常见）", "浏览器"),
+    ("firefox", "Firefox 浏览器（120）", "浏览器"),
+    ("safari", "Safari 浏览器（16.0）", "浏览器"),
+    ("edge", "Edge 浏览器（85）", "浏览器"),
+    ("qq", "QQ 浏览器（11.1）", "浏览器"),
+    ("q360", "360 浏览器（7.5）", "浏览器"),
+    ("bun", "Bun.js（BoringSSL）", "运行时与工具"),
+    ("node", "Node.js（OpenSSL）", "运行时与工具"),
+    ("deno", "Deno（rustls）", "运行时与工具"),
+    ("curl", "curl（OpenSSL）", "运行时与工具"),
+    ("python", "Python requests（OpenSSL）", "运行时与工具"),
+    ("okhttp", "OkHttp 3（Android）", "运行时与工具"),
+    ("golang", "Go 标准库（crypto/tls）", "运行时与工具"),
+    ("ios", "iOS Safari（14）", "移动端"),
+    ("android", "Android OkHttp（11）", "移动端"),
+    ("custom", "自定义 JA3 指纹", "自定义"),
+];
+
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
 
 /// Terminal responses carry a token charge; streaming responses defer accounting to body completion.
@@ -174,17 +212,7 @@ pub async fn handle_count_tokens(
 /// feature; the skeleton ships the fixed list).
 pub async fn handle_models() -> Response {
     let now = now_secs();
-    let models = [
-        "GLM-5.3",
-        "GLM-5.3-Flash",
-        "GLM-5.2",
-        "GLM-5.1",
-        "GLM-5",
-        "GLM-5-Turbo",
-        "GLM-5V-Turbo",
-        "GLM-5.1-Highspeed",
-    ];
-    let data: Vec<serde_json::Value> = models
+    let data: Vec<serde_json::Value> = MODEL_IDS
         .iter()
         .map(|m| {
             json!({

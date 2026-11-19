@@ -53,10 +53,13 @@ pub async fn resolve_key_mw(
         return unauthorized();
     };
 
-    let root = state.root_key.clone();
-    if !root.is_empty() && const_eq(&root, &provided) {
-        req.extensions_mut().insert(ResolvedKey { named: None });
-        return next.run(req).await;
+    // An unreadable stored key fails closed: only named keys may authenticate.
+    if state.refresh_root_key() {
+        let root = state.root_key();
+        if !root.is_empty() && const_eq(&root, &provided) {
+            req.extensions_mut().insert(ResolvedKey { named: None });
+            return next.run(req).await;
+        }
     }
 
     let hash = key_hash(&provided);

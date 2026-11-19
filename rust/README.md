@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 530 tests across 71 suites, and strict Clippy
+The current workspace run passes 554 tests across 72 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -114,14 +114,16 @@ fixtures. These checks do not establish Go feature parity.
    COSE credentials, enforce the configured RP ID and origins, and persist the
    signature counter and user-verification latch before issuing a session
    cookie. An omitted Go `signCount` is read as zero; malformed present values
-   fail closed. Login is password-first and stages a second-factor ticket only
-   when passkeys are enrolled. Ordinary same-Host administration keeps the
+   fail closed. Login is password-first and stages a second-factor ticket when
+   passkeys are enrolled or TOTP is enabled without an inline code; an inline
+   TOTP or recovery code in the login body still issues a session. Ordinary
+   same-Host administration keeps the
    existing Origin policy; only the ceremonies require the configured origins.
    Password changes now check the peer/action throttle before bcrypt and block
    after five failures. RP configuration comes from the environment only.
    Remaining gaps: attestation trust-chain evaluation is not implemented,
-   the cross-origin flag is unverified in a real browser, the panel has no 2FA
-   management UI yet, and the session cookie does not yet set `Secure`.
+   the cross-origin flag is unverified in a real browser, and the session
+   cookie does not yet set `Secure`.
 4. Broader OpenAI compatibility coverage beyond the current streaming tests,
    plus async ticket and highspeed-card workflows.
 5. Manual billing routes cover preview and claim, Start Plan activation events
@@ -173,7 +175,19 @@ fixtures. These checks do not establish Go feature parity.
    Inference uses the captured request-start account group so account deletion
    does not break an in-flight fallback. Proxy probes/system discovery, browser
    CAPTCHA solving, and fingerprinted TLS remain unfinished.
-7. Release packaging, rollback-safe migration, side-by-side traffic validation,
+7. Web console. The Go console assets are embedded byte-for-byte and served at
+   `/web` with Go's cache policy and index fallback. The endpoints the console
+   needs that map onto existing capability are live: login info, TOTP status
+   and enable, username change, dashboard, groups, fingerprints, models, and
+   root API key read/reveal/generate with password step-up and per-peer,
+   per-action lockouts. API JSON responses are `no-store`, matching Go.
+   The root key persists in settings and is authoritative: a rotated key stops
+   authenticating within one second on every instance sharing the database,
+   reconciled once per second on the request path. Still missing from the
+   console: model catalog sync, proxy node probes and system proxy discovery,
+   CAPTCHA status/solve/invalidate, off-peak availability, highspeed status,
+   and account switch-back/restore-local. Those routes return 404 until ported.
+8. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.
 
 ## Local checks

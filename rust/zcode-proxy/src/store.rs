@@ -3,7 +3,7 @@
 //! matching the Go pool's serialized-writer discipline. Additive migrations
 //! inspect existing columns before changing the schema.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Errors deliberately omit SQL, bound values, and credential material.
 #[derive(Debug)]
@@ -391,6 +391,24 @@ pub fn persist_settings(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// Single-key loader that decrypts sensitive values, so a refresh does not
+/// fail the whole settings map on one unrelated bad row.
+pub fn load_setting(
+    conn: &Connection,
+    vault: &crate::vault::Vault,
+    key: &str,
+) -> Result<Option<String>, StoreError> {
+    let value: Option<String> = conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    match value {
+        Some(value) if sensitive_setting(key) => Ok(Some(vault.decrypt(&value)?)),
+        other => Ok(other),
+    }
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {

@@ -271,9 +271,10 @@ pub async fn handle_password_change(
         Ok(v) => v,
         Err(_) => return err(StatusCode::BAD_REQUEST, "body is not valid JSON"),
     };
-    let current = v
-        .get("current_password")
-        .and_then(serde_json::Value::as_str)
+    // Go sends old_password; current_password stays as a compatibility alias.
+    let current = ["old_password", "current_password"]
+        .iter()
+        .find_map(|key| v.get(key).and_then(serde_json::Value::as_str))
         .unwrap_or("");
     let new_pw = v
         .get("new_password")
@@ -306,7 +307,10 @@ pub async fn handle_password_change(
         .persist_settings_locked(
             &mut db,
             &mut settings,
-            &[("admin_password_hash", &new_hash)],
+            &[
+                ("admin_password_hash", &new_hash),
+                ("admin_password_default", ""),
+            ],
         )
         .is_err()
     {
