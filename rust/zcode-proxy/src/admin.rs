@@ -20,6 +20,13 @@ use crate::store;
 pub const SESSION_TTL_SECS: i64 = 86_400;
 pub const SESSION_COOKIE: &str = "zcode_rs_session";
 
+pub fn cookie_secure_from(value: Option<&str>) -> bool {
+    matches!(
+        value.unwrap_or("").trim().to_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn storage_error() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -321,15 +328,15 @@ pub(crate) fn login_success(state: &AppState, username: &str) -> Response {
         StatusCode::OK,
         json!({"success": true, "username": username}),
     );
-    resp.headers_mut().insert(
-        "set-cookie",
-        format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECS}",
-            SESSION_COOKIE, t
-        )
-        .parse()
-        .unwrap(),
+    let mut cookie = format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECS}",
+        SESSION_COOKIE, t
     );
+    if cookie_secure_from(std::env::var("ZCODE_COOKIE_SECURE").ok().as_deref()) {
+        cookie.push_str("; Secure");
+    }
+    resp.headers_mut()
+        .insert("set-cookie", cookie.parse().unwrap());
     resp
 }
 
