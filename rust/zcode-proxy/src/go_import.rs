@@ -255,6 +255,9 @@ fn project(
         ])?;
     }
     let settings = store::load_settings(source, source_vault)?;
+    if let Some(proxy) = settings.get("upstream_proxy") {
+        crate::egress::validate_proxy_url(proxy)?;
+    }
     let mut settings: BTreeMap<_, _> = settings.into_iter().collect();
     for (go, rust) in [
         ("password_hash", "admin_password_hash"),

@@ -211,13 +211,30 @@ pub fn now_secs() -> i64 {
 /// go through the envelope path (L3 ordering); stream responses pass bytes
 /// through untouched.
 async fn attempt_upstream(
-    client: &reqwest::Client,
+    state: &AppState,
+    account_id: i64,
     url: &str,
     headers: Vec<(String, String)>,
     payload: &[u8],
     want_stream: bool,
     shape: Shape,
 ) -> Attempt {
+    let client = crate::egress::client_builder(state, Some(account_id)).and_then(|builder| {
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| crate::store::StoreError::Vault)
+    });
+    let Ok(client) = client else {
+        return Attempt::Written(
+            error_response(
+                StatusCode::BAD_GATEWAY,
+                "api_error",
+                "cannot initialize upstream client",
+            ),
+            0,
+        );
+    };
     let resp = match client
         .post(url)
         .headers(headers_vec_to_map(headers))
@@ -528,7 +545,6 @@ pub async fn handle_messages(
     );
     let payload = serde_json::to_vec(&Value::Object(obj)).unwrap_or_default();
 
-    let client = reqwest::Client::new();
     let mode = state
         .setting("paid_fallback_mode")
         .unwrap_or_else(|| "free_first".into());
@@ -582,7 +598,8 @@ pub async fn handle_messages(
 
             let (url, _) = (endpoint_for(&state, phase), ());
             let out = attempt_upstream(
-                &client,
+                &state,
+                acct.id,
                 &url,
                 auth_headers(creds, phase),
                 &payload,
@@ -655,7 +672,8 @@ pub async fn handle_messages(
                             if let Some(creds) = creds_map.get(&acct.id) {
                                 let url = endpoint_for(&state, CHANNEL_PAID);
                                 let out = attempt_upstream(
-                                    &client,
+                                    &state,
+                                    acct.id,
                                     &url,
                                     auth_headers(creds, CHANNEL_PAID),
                                     &payload,

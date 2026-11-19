@@ -221,10 +221,7 @@ async fn start_poll(state: Arc<AppState>, group: String) -> Response {
         );
     }
     let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    let client = match Client::new() {
-        Ok(client) => client,
-        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
-    };
+    let client = Client(ClientState::Poll(Arc::downgrade(&state)));
     let init = async {
         client
             .request(
@@ -361,7 +358,7 @@ async fn start_poll(state: Arc<AppState>, group: String) -> Response {
             }
         };
         let result = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work).await;
-        // All HTTP and enrichment use copied configuration, never a strong application owner.
+        // Each request reads current egress policy without retaining a strong application owner.
         if let Some(state) = weak.upgrade() {
             let result = match result {
                 Ok(Ok(account)) if Instant::now() < deadline => {
@@ -670,16 +667,28 @@ fn url(raw: &str) -> Result<reqwest::Url, &'static str> {
     Ok(url)
 }
 
-struct Client(reqwest::Client);
+enum ClientState<'a> {
+    Borrowed(&'a AppState),
+    Poll(std::sync::Weak<AppState>),
+}
 
-impl Client {
-    fn new() -> Result<Self, &'static str> {
-        reqwest::Client::builder()
+struct Client<'a>(ClientState<'a>);
+
+impl Client<'_> {
+    fn http(&self) -> Result<reqwest::Client, &'static str> {
+        let builder = match &self.0 {
+            ClientState::Borrowed(state) => crate::egress::client_builder(state, None),
+            ClientState::Poll(weak) => {
+                let state = weak.upgrade().ok_or("OAuth service stopped")?;
+                crate::egress::client_builder(&state, None)
+            }
+        };
+        builder
+            .map_err(|_| "cannot initialize OAuth client")?
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()
-            .map(Self)
             .map_err(|_| "cannot initialize OAuth client")
     }
 
@@ -691,7 +700,7 @@ impl Client {
         body: Option<Value>,
     ) -> Result<Value, &'static str> {
         // Per-request headers and disabled redirects isolate access and business tokens by host.
-        let mut request = self.0.request(method, target);
+        let mut request = self.http()?.request(method, target);
         if !bearer.is_empty() {
             request = request.bearer_auth(bearer);
         }
@@ -713,7 +722,7 @@ impl Client {
         target: reqwest::Url,
         bearer: &str,
     ) -> Result<Option<Value>, &'static str> {
-        let response = match self.0.get(target).bearer_auth(bearer).send().await {
+        let response = match self.http()?.get(target).bearer_auth(bearer).send().await {
             Ok(response) => response,
             Err(_) => return Ok(None),
         };
@@ -764,7 +773,7 @@ async fn exchange(
     flow: &Flow,
     code: &str,
 ) -> Result<BundleAccount, &'static str> {
-    let client = Client::new()?;
+    let client = Client(ClientState::Borrowed(state));
     let response = client.request(reqwest::Method::POST, url(&state.management.oauth_token)?, "",
         Some(json!({"provider":"zai","code":code,"redirect_uri":flow.redirect_uri,"state":flow.state}))).await?;
     if let Some(code) = response.get("code") {
@@ -779,7 +788,7 @@ async fn exchange(
 }
 
 async fn ingest_tokens(
-    client: &Client,
+    client: &Client<'_>,
     oauth: &OAuthUrls,
     flow: &Flow,
     data: &Value,
@@ -868,7 +877,11 @@ fn identifier(value: &Value) -> Result<String, &'static str> {
     }
 }
 
-async fn api_key(client: &Client, oauth: &OAuthUrls, access: &str) -> Result<String, &'static str> {
+async fn api_key(
+    client: &Client<'_>,
+    oauth: &OAuthUrls,
+    access: &str,
+) -> Result<String, &'static str> {
     let login = client
         .request(
             reqwest::Method::POST,

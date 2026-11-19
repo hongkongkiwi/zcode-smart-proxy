@@ -14,6 +14,7 @@ pub mod autoreset;
 pub mod background_refresh;
 mod cron;
 mod desktop_credentials;
+pub mod egress;
 pub mod engine;
 pub mod gateway_admin;
 pub mod go_compat;

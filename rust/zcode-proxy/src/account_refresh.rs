@@ -261,7 +261,7 @@ async fn refresh_core(
             }
         }
     };
-    let quota = match fetch(state, &credentials.0, &credentials.1, &device_mid).await {
+    let quota = match fetch(state, id, &credentials.0, &credentials.1, &device_mid).await {
         Ok(quota) => quota,
         Err(_) => return Err(failure(StatusCode::BAD_GATEWAY, "quota retrieval failed")),
     };
@@ -292,7 +292,7 @@ async fn refresh_core(
             }
         };
         if attempt {
-            exchange_token(&state.management.oauth_token, &credentials.2)
+            exchange_token(state, id, &state.management.oauth_token, &credentials.2)
                 .await
                 .ok()
         } else {
@@ -419,11 +419,14 @@ fn refresh_matches(db: &rusqlite::Connection, state: &AppState, id: i64, expecte
 }
 
 async fn exchange_token(
+    state: &AppState,
+    account_id: i64,
     url: &str,
     refresh: &str,
 ) -> Result<crate::store::AccountTokens, FetchError> {
     // Go's refresh POST uses no billing identity or authorization headers.
-    let client = reqwest::Client::builder()
+    let client = crate::egress::client_builder(state, Some(account_id))
+        .map_err(|_| FetchError::Operational)?
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
@@ -473,8 +476,10 @@ async fn exchange_token(
     })
 }
 
-pub(crate) struct Client {
-    pub(crate) http: reqwest::Client,
+pub(crate) struct Client<'a> {
+    state: &'a AppState,
+    account_id: Option<i64>,
+    headers: reqwest::header::HeaderMap,
 }
 
 pub(crate) fn request_id() -> String {
@@ -524,8 +529,13 @@ pub(crate) enum FetchError {
     InvalidBody,
 }
 
-impl Client {
-    pub(crate) fn new(app_version: &str, device_mid: &str) -> Result<Self, FetchError> {
+impl<'a> Client<'a> {
+    pub(crate) fn new(
+        state: &'a AppState,
+        account_id: Option<i64>,
+        app_version: &str,
+        device_mid: &str,
+    ) -> Result<Self, FetchError> {
         let os = match std::env::consts::OS {
             "macos" => "darwin",
             other => other,
@@ -565,19 +575,27 @@ impl Client {
                 os_version.parse().map_err(|_| FetchError::Operational)?,
             );
         }
-        let http = reqwest::Client::builder()
-            .default_headers(headers)
+        Ok(Self {
+            state,
+            account_id,
+            headers,
+        })
+    }
+
+    pub(crate) fn http(&self) -> Result<reqwest::Client, FetchError> {
+        crate::egress::client_builder(self.state, self.account_id)
+            .map_err(|_| FetchError::Operational)?
+            .default_headers(self.headers.clone())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(25))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| FetchError::Operational)?;
-        Ok(Self { http })
+            .map_err(|_| FetchError::Operational)
     }
 
     async fn get(&self, url: reqwest::Url, auth: &str) -> Result<(u16, Value), FetchError> {
         let mut response = self
-            .http
+            .http()?
             .get(url)
             .header("authorization", auth)
             .header("x-request-id", request_id())
@@ -611,11 +629,17 @@ impl Client {
 
 async fn fetch(
     state: &AppState,
+    account_id: i64,
     jwt: &str,
     key: &str,
     device_mid: &str,
 ) -> Result<Quota, FetchError> {
-    let client = Client::new(&state.management.app_version, device_mid)?;
+    let client = Client::new(
+        state,
+        Some(account_id),
+        &state.management.app_version,
+        device_mid,
+    )?;
     if !jwt.is_empty() {
         match billing(&client, state, jwt).await {
             Ok(quota) => {
@@ -664,7 +688,7 @@ fn parse_url(value: &str) -> Result<reqwest::Url, FetchError> {
     Ok(url)
 }
 
-async fn billing(client: &Client, state: &AppState, jwt: &str) -> Result<Quota, FetchError> {
+async fn billing(client: &Client<'_>, state: &AppState, jwt: &str) -> Result<Quota, FetchError> {
     let mut not_entitled = false;
     for endpoint in ["balance", "current"] {
         let mut url = parse_url(&format!(
@@ -696,10 +720,16 @@ async fn billing(client: &Client, state: &AppState, jwt: &str) -> Result<Quota, 
 
 pub(crate) async fn confirm_billing(
     state: &AppState,
+    account_id: i64,
     jwt: &str,
     device_mid: &str,
 ) -> Result<Quota, FetchError> {
-    let client = Client::new(&state.management.app_version, device_mid)?;
+    let client = Client::new(
+        state,
+        Some(account_id),
+        &state.management.app_version,
+        device_mid,
+    )?;
     let quota = billing(&client, state, jwt).await?;
     if quota.auth_failed || quota.not_entitled || quota.plan_tier.is_empty() {
         return Err(FetchError::Operational);
@@ -707,7 +737,7 @@ pub(crate) async fn confirm_billing(
     Ok(quota)
 }
 
-async fn monitor(client: &Client, state: &AppState, key: &str) -> Result<Quota, FetchError> {
+async fn monitor(client: &Client<'_>, state: &AppState, key: &str) -> Result<Quota, FetchError> {
     let (status, body) = client
         .get(parse_url(&state.management.quota_limit)?, key)
         .await?;

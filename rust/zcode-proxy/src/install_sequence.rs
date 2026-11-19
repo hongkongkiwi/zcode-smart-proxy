@@ -121,7 +121,7 @@ pub(crate) async fn send_install_sequence_until(
         report.attempted += 1;
         if tokio::time::timeout(
             Duration::from_secs(5),
-            request(state, &account, payload.as_ref()),
+            request(state, account_id, &account, payload.as_ref()),
         )
         .await
         .unwrap_or(false)
@@ -132,7 +132,12 @@ pub(crate) async fn send_install_sequence_until(
     Ok(report)
 }
 
-async fn request(state: &AppState, account: &Account, payload: Option<&Value>) -> bool {
+async fn request(
+    state: &AppState,
+    account_id: i64,
+    account: &Account,
+    payload: Option<&Value>,
+) -> bool {
     let endpoint = if payload.is_some() {
         &state.install_urls.event_report
     } else {
@@ -152,11 +157,18 @@ async fn request(state: &AppState, account: &Account, payload: Option<&Value>) -
         url.query_pairs_mut()
             .append_pair("app_version", &state.management.app_version);
     }
-    let Ok(client) = Client::new(&state.management.app_version, &account.device_mid) else {
+    let Ok(client) = Client::new(
+        state,
+        Some(account_id),
+        &state.management.app_version,
+        &account.device_mid,
+    ) else {
         return false;
     };
-    let mut request = client
-        .http
+    let Ok(http) = client.http() else {
+        return false;
+    };
+    let mut request = http
         .request(
             if payload.is_some() {
                 Method::POST

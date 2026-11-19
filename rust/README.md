@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 451 tests across 64 suites, and strict Clippy
+The current workspace run passes 475 tests across 66 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -143,8 +143,15 @@ fixtures. These checks do not establish Go feature parity.
    manual claims need a real solver before operational use. Highspeed
    consumption remains opt-in. Scheduler signal handling has source review but
    no process-level signal test yet.
-6. Browser CAPTCHA solving and fingerprinted TLS transport. The current traits
-   and no-op implementations are placeholders, not completed integrations.
+6. Global egress configuration now reaches inference, quota, token refresh,
+   OAuth, billing/reset, and installation clients. Proxy secrets persist encrypted;
+   settings reads omit userinfo. Invalid configuration fails closed, including
+   invalid proxy settings during offline Go import. Explicit direct mode ignores
+   ambient proxy environment variables. Loopback HTTP proxy tests cover routing
+   and authentication. HTTPS CONNECT, HTTPS-proxy trust, and SOCKS transport still
+   need executable coverage. Group/default proxy nodes, browser CAPTCHA solving,
+   and fingerprinted TLS remain unfinished; their legacy traits are not working
+   integrations.
 7. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.
 

@@ -321,16 +321,30 @@ pub async fn handle_get_settings(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Response {
     let settings = state.settings.lock().unwrap();
-    let public: std::collections::HashMap<_, _> = settings
-        .iter()
-        .filter(|(key, _)| SETTINGS_WHITELIST.contains(&key.as_str()))
-        .collect();
+    let mut public = serde_json::Map::new();
+    for (key, value) in settings.iter() {
+        if !SETTINGS_WHITELIST.contains(&key.as_str()) {
+            continue;
+        }
+        if key == "upstream_proxy" {
+            let Ok(display) = crate::egress::display_proxy_url(value) else {
+                public.insert("upstream_proxy_invalid".into(), json!(true));
+                public.insert("upstream_proxy_has_auth".into(), json!(false));
+                continue;
+            };
+            public.insert(key.clone(), json!(display));
+            public.insert("upstream_proxy_has_auth".into(), json!(value.contains('@')));
+        } else {
+            public.insert(key.clone(), json!(value));
+        }
+    }
     (StatusCode::OK, Json(public)).into_response()
 }
 
 /// Settings whitelist (Go settingsWhitelist subset the port honors).
 const SETTINGS_WHITELIST: &[&str] = &[
     "paid_fallback_mode",
+    "upstream_proxy",
     "selection_strategy",
     "sticky_sessions",
     "gateway_paused",
@@ -377,18 +391,49 @@ pub async fn handle_put_settings(
                 .as_str()
                 .and_then(|s| s.parse::<i64>().ok())
                 .is_some_and(|n| (0..=168).contains(&n)),
+            "upstream_proxy" => value
+                .as_str()
+                .is_some_and(|value| crate::egress::validate_proxy_url(value).is_ok()),
             _ => false,
         };
         if !valid {
             return (StatusCode::BAD_REQUEST, "invalid setting value").into_response();
         }
     }
-    let values: Vec<_> = map
+    let mut db = state.db.lock().unwrap();
+    let mut settings = state.settings.lock().unwrap();
+    let mut values = Vec::new();
+    for (key, value) in map {
+        if !SETTINGS_WHITELIST.contains(&key.as_str()) {
+            continue;
+        }
+        let value = value.as_str().unwrap();
+        let value = if key == "upstream_proxy" {
+            let incoming = crate::egress::validate_proxy_url(value)
+                .unwrap()
+                .unwrap_or_default();
+            match settings.get(key) {
+                Some(current) if !incoming.is_empty() && !incoming.contains('@') => {
+                    match crate::egress::display_proxy_url(current) {
+                        Ok(display) if display == incoming => current.clone(),
+                        _ => incoming,
+                    }
+                }
+                _ => incoming,
+            }
+        } else {
+            value.to_owned()
+        };
+        values.push((key.as_str(), value));
+    }
+    let values: Vec<_> = values
         .iter()
-        .filter(|(key, _)| SETTINGS_WHITELIST.contains(&key.as_str()))
-        .map(|(key, value)| (key.as_str(), value.as_str().unwrap()))
+        .map(|(key, value)| (*key, value.as_str()))
         .collect();
-    if state.persist_settings(&values).is_err() {
+    if state
+        .persist_settings_locked(&mut db, &mut settings, &values)
+        .is_err()
+    {
         return storage_error();
     }
     let updated: Vec<_> = values.iter().map(|(key, _)| *key).collect();

@@ -236,9 +236,16 @@ async fn request(
             .append_pair("app_version", &state.management.app_version)
             .append_pair("platform", &platform());
     }
-    let client = Client::new(&state.management.app_version, &a.device_mid).map_err(|_| ())?;
+    let client = Client::new(
+        state,
+        Some(a.id),
+        &state.management.app_version,
+        &a.device_mid,
+    )
+    .map_err(|_| ())?;
     let mut req = client
-        .http
+        .http()
+        .map_err(|_| ())?
         .request(method, url)
         .header("authorization", format!("Bearer {token}"))
         .header("accept", "application/json")
@@ -704,7 +711,7 @@ async fn confirm_action(
             .push_str("; quota confirmation skipped because the account changed");
         return None;
     }
-    match account_refresh::confirm_billing(state, billing_token(a), &a.device_mid).await {
+    match account_refresh::confirm_billing(state, a.id, billing_token(a), &a.device_mid).await {
         Ok(quota) => Some(quota),
         Err(_) => {
             result
@@ -802,7 +809,8 @@ async fn activate_outcome(
             }
         }
     }
-    let quota = account_refresh::confirm_billing(state, billing_token(a), &a.device_mid).await;
+    let quota =
+        account_refresh::confirm_billing(state, a.id, billing_token(a), &a.device_mid).await;
     match quota {
         Ok(quota) => {
             result.ok = true;
