@@ -26,6 +26,7 @@ pub mod install_sequence;
 mod local_switchback;
 mod model_catalog;
 mod offpeak;
+mod offpeak_queue;
 pub mod openai_routes;
 mod openai_stream;
 pub mod passkey;
@@ -51,6 +52,10 @@ use state::AppState;
 /// Data plane behind the API-key gate.
 fn data_plane(state: Arc<AppState>) -> Router {
     Router::new()
+        .route(
+            "/async/v1/messages",
+            axum::routing::any(offpeak_queue::handle_messages),
+        )
         .route("/v1/messages", post(engine::handle_messages))
         .route("/v1/chat/completions", post(openai_routes::handle_chat))
         .route("/v1/completions", post(openai_routes::handle_completions))

@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 618 tests across 78 suites, and strict Clippy
+The current workspace run passes 651 tests across 80 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -194,7 +194,15 @@ fixtures. These checks do not establish Go feature parity.
    verification parameter needs the headless Chrome flow, which is not ported.
    Off-peak availability probes eligible accounts in stored order and reports
    the first one that answers, without taking or settling a ticket. A failed
-   probe never echoes the account credentials. Highspeed status reports whether
+   probe never echoes the account credentials. The server-side off-peak queue
+   (`POST /async/v1/messages`) takes a ticket, polls with server-advised
+   intervals and keepalive frames for streaming clients, forwards with the
+   authoritative ticket header, and settles after the response is consumed.
+   Retakes reuse the task ID; only a 429 whose body code is 3105 retries the
+   same ticket, a bare 429 cools the account and switches. 3104 and 3106 are
+   generic failures here, matching Go's queue rather than the plain lane's
+   passthrough comment. Gateway keys share the plain lane's quota and model
+   gates. Highspeed status reports whether
    the lane is enabled and lists the z.ai accounts. It carries no card fields,
    because those come from the draw flow, and this route never draws a card.
    Switch-back and restore-local write credentials into a configured local

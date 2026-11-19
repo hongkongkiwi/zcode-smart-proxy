@@ -481,6 +481,12 @@ const SETTINGS_WHITELIST: &[&str] = &[
     "selection_strategy",
     "sticky_sessions",
     "gateway_paused",
+    "async_enabled",
+    "async_poll_interval_ms",
+    "async_keepalive_ms",
+    "async_max_retries",
+    "async_max_wait_sec",
+    "highspeed_lane_enabled",
     "auto_reset_enabled",
     "auto_reset_expiry_enabled",
     "auto_reset_min_wait_minutes",
@@ -504,6 +510,7 @@ pub async fn handle_put_settings(
             (key.as_str(), value.as_str()),
             (
                 "gateway_paused"
+                    | "async_enabled"
                     | "sticky_sessions"
                     | "auto_reset_enabled"
                     | "auto_reset_expiry_enabled",
@@ -516,6 +523,16 @@ pub async fn handle_put_settings(
                 Some("random" | "round_robin" | "best_quota" | "priority")
             )
         ) || match key.as_str() {
+            "highspeed_lane_enabled" => {
+                matches!(value.as_str(), Some("0" | "1" | "true" | "false"))
+            }
+            "async_poll_interval_ms"
+            | "async_keepalive_ms"
+            | "async_max_retries"
+            | "async_max_wait_sec" => value
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_some_and(|n| n >= 0),
             "auto_reset_min_wait_minutes" | "auto_reset_expiry_spend_minutes" => value
                 .as_str()
                 .and_then(|s| s.parse::<i64>().ok())

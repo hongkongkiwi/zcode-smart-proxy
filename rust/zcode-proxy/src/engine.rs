@@ -402,7 +402,34 @@ use axum::Json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-fn terminal_response(
+pub(crate) fn named_key_gate(
+    named: &Option<crate::state::NamedKey>,
+    model: &str,
+) -> Option<Response> {
+    if let Some(k) = named {
+        if k.quota_total > 0 && k.quota_used >= k.quota_total {
+            return Some(error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                &format!(
+                    "gateway key token quota exhausted ({}/{}): {}",
+                    k.quota_used, k.quota_total, k.name
+                ),
+            ));
+        }
+        let model = model.to_lowercase();
+        if !zcode_core::model_allowed(&k.models, &model) {
+            return Some(error_response(
+                StatusCode::FORBIDDEN,
+                "api_error",
+                &format!("model not allowed for this gateway key: {model}"),
+            ));
+        }
+    }
+    None
+}
+
+pub(crate) fn terminal_response(
     state: &Arc<AppState>,
     account_id: i64,
     gateway_key_id: i64,
@@ -523,30 +550,11 @@ pub async fn handle_messages(
         let normalized = zcode_core::normalize_model_name(m, &config_models);
         obj.insert("model".into(), Value::String(normalized));
     }
-    // Named-key per-request gates: quota + model whitelist.
-    if let Some(k) = &named {
-        if k.quota_total > 0 && k.quota_used >= k.quota_total {
-            return error_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limit_error",
-                &format!(
-                    "gateway key token quota exhausted ({}/{}): {}",
-                    k.quota_used, k.quota_total, k.name
-                ),
-            );
-        }
-        let model = obj
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_lowercase();
-        if !zcode_core::model_allowed(&k.models, &model) {
-            return error_response(
-                StatusCode::FORBIDDEN,
-                "api_error",
-                &format!("model not allowed for this gateway key: {model}"),
-            );
-        }
+    if let Some(response) = named_key_gate(
+        &named,
+        obj.get("model").and_then(Value::as_str).unwrap_or(""),
+    ) {
+        return response;
     }
     let want_stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let shape = if headers
