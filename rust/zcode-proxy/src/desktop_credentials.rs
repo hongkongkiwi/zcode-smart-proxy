@@ -5,6 +5,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -35,6 +36,30 @@ fn secret(explicit: Option<&str>, fallback_home: Option<&Path>) -> Result<Zeroiz
     Ok(Zeroizing::new(format!(
         "zcode-credential-fallback:{platform}:{home}:{username}"
     )))
+}
+
+// The switch-back tests compile this file standalone and only call decrypt.
+#[allow(dead_code)]
+pub(crate) fn encrypt(
+    plain: &str,
+    explicit: Option<&str>,
+    fallback_home: Option<&Path>,
+) -> Result<String, ()> {
+    let secret = secret(explicit, fallback_home)?;
+    let key = Zeroizing::new(<[u8; 32]>::from(Sha256::digest(secret.as_bytes())));
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| ())?;
+    let mut nonce = [0u8; 12];
+    OsRng.try_fill_bytes(&mut nonce).map_err(|_| ())?;
+    let sealed = cipher
+        .encrypt(Nonce::from_slice(&nonce), plain.as_bytes())
+        .map_err(|_| ())?;
+    let (ciphertext, tag) = sealed.split_at(sealed.len() - 16);
+    Ok(format!(
+        "enc:v1:{}.{}.{}",
+        URL_SAFE_NO_PAD.encode(nonce),
+        URL_SAFE_NO_PAD.encode(tag),
+        URL_SAFE_NO_PAD.encode(ciphertext)
+    ))
 }
 
 pub(crate) fn decrypt(

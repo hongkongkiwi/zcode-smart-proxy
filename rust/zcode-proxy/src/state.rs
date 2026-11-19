@@ -168,6 +168,7 @@ pub struct AppState {
         Mutex<Option<std::sync::Weak<crate::background_refresh::BackgroundRefresh>>>,
     pub oauth: OAuthUrls,
     pub oauth_poll: PollOAuthUrls,
+    pub local_client_dir: Option<std::path::PathBuf>,
     /// An explicit credential file confines local import to it and its siblings.
     pub local_credentials_path: Option<std::path::PathBuf>,
     pub local_credentials_secret: Option<zeroize::Zeroizing<String>>,
@@ -367,6 +368,7 @@ impl AppState {
             background_refresh: Mutex::new(None),
             oauth: OAuthUrls::default(),
             oauth_poll: PollOAuthUrls::default(),
+            local_client_dir: None,
             local_credentials_path: None,
             local_credentials_secret: None,
             oauth_flows: Mutex::new(crate::account_oauth::FlowStore::default()),

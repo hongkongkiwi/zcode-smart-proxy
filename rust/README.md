@@ -196,8 +196,14 @@ fixtures. These checks do not establish Go feature parity.
    probe never echoes the account credentials. Highspeed status reports whether
    the lane is enabled and lists the z.ai accounts. It carries no card fields,
    because those come from the draw flow, and this route never draws a card.
-   Still missing: account switch-back and restore-local, which write
-   credentials into a local ZCode install. Those two routes return 404.
+   Switch-back and restore-local write credentials into a configured local
+   ZCode directory, encrypted with the same home-derived secret the desktop
+   client uses. Both are off unless a directory is configured. They trust that
+   directory and its parents are writable only by the proxy user: the file
+   writes check for symlinks first, but a concurrent replacement of a directory
+   entry can still redirect one, because the standard library has no
+   descriptor-relative file operations. Restore refuses a snapshot it cannot
+   decrypt before it writes anything. Neither route signals or stops a process.
 8. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.
 

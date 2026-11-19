@@ -23,6 +23,7 @@ pub mod go_compat;
 pub mod go_import;
 pub mod identity;
 pub mod install_sequence;
+mod local_switchback;
 mod model_catalog;
 mod offpeak;
 pub mod openai_routes;
@@ -198,6 +199,14 @@ fn admin_api(state: Arc<AppState>) -> Router {
             post(account_paste::handle_import),
         )
         .route("/api/accounts/export", post(account_bundle::handle_export))
+        .route(
+            "/api/accounts/:id/switch-back",
+            post(local_switchback::switch_back),
+        )
+        .route(
+            "/api/accounts/:id/restore-local",
+            post(local_switchback::restore_local),
+        )
         .route(
             "/api/accounts/import/bundle",
             post(account_bundle::handle_import),
