@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 554 tests across 72 suites, and strict Clippy
+The last full workspace run passed 554 tests across 72 suites. This increment adds 11 CAPTCHA tests and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -183,9 +183,15 @@ fixtures. These checks do not establish Go feature parity.
    per-action lockouts. API JSON responses are `no-store`, matching Go.
    The root key persists in settings and is authoritative: a rotated key stops
    authenticating within one second on every instance sharing the database,
-   reconciled once per second on the request path. Still missing from the
-   console: model catalog sync, proxy node probes and system proxy discovery,
-   CAPTCHA status/solve/invalidate, off-peak availability, highspeed status,
+   reconciled once per second on the request path. Model catalog sync, proxy
+   diagnostics, and the CAPTCHA routes are live. Catalog sync caches the
+   client-configs model list and returns `models: null` for a missing or
+   malformed cache. Proxy diagnostics probe fixed loopback ports, test an
+   explicit URL or a stored node, and redact credentials. CAPTCHA status,
+   invalidation, and the per-proxy parameter cache are implemented, including
+   the 60 second failure cooldown. Solving still fails closed: producing a
+   verification parameter needs the headless Chrome flow, which is not ported.
+   Still missing from the console: off-peak availability, highspeed status,
    and account switch-back/restore-local. Those routes return 404 until ported.
 8. Release packaging, rollback-safe migration, side-by-side traffic validation,
    and a production cutover only after parity checks pass.

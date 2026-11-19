@@ -12,6 +12,7 @@ pub mod admin;
 pub mod auth;
 pub mod autoreset;
 pub mod background_refresh;
+pub mod captcha;
 pub mod console;
 mod cron;
 mod desktop_credentials;
@@ -88,6 +89,9 @@ fn data_plane(state: Arc<AppState>) -> Router {
 fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
+        .route("/api/captcha/status", get(captcha::handle_status))
+        .route("/api/captcha/invalidate", post(captcha::handle_invalidate))
+        .route("/api/captcha/solve", post(captcha::handle_solve))
         .route(
             "/api/proxies",
             get(proxy_admin::handle_list).post(proxy_admin::handle_create),
