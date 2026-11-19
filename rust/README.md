@@ -158,8 +158,9 @@ fixtures. These checks do not establish Go feature parity.
    compatibility and is not suitable for the automatic reset service.
    The default CAPTCHA solver fails closed;
    manual claims need a real solver before operational use. Highspeed
-   consumption remains opt-in. Scheduler signal handling has source review but
-   no process-level signal test yet.
+   consumption remains opt-in. Scheduler shutdown has a process-level signal
+   smoke test: SIGTERM and SIGINT each stop the listener, exit cleanly, and
+   leave the database intact.
 6. Global egress configuration now reaches inference, quota, token refresh,
    OAuth, billing/reset, and installation clients. Proxy secrets persist encrypted;
    settings reads omit userinfo. Invalid configuration fails closed, including
@@ -173,8 +174,8 @@ fixtures. These checks do not establish Go feature parity.
    node credentials fail closed. Node hosts must be IP literals or RFC1123
    hostnames; legacy underscore/Unicode hosts need correction before import.
    Inference uses the captured request-start account group so account deletion
-   does not break an in-flight fallback. Proxy probes/system discovery, browser
-   CAPTCHA solving, and fingerprinted TLS remain unfinished.
+   does not break an in-flight fallback. Proxy probes and system discovery are
+   ported; browser CAPTCHA solving and fingerprinted TLS remain unfinished.
 7. Web console. The Go console assets are embedded byte-for-byte and served at
    `/web` with Go's cache policy and index fallback. The endpoints the console
    needs that map onto existing capability are live: login info, TOTP status
