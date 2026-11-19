@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 436 tests across 63 suites, and strict Clippy
+The current workspace run passes 451 tests across 64 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -131,8 +131,11 @@ fixtures. These checks do not establish Go feature parity.
    evaluates opt-in threshold and expiry jobs, shares manual spend stamps,
    checks cold reset history, and audits acknowledged spends before quota-only
    refresh. It rechecks credentials, administrator state, and stop state before
-   requests. The manager is installed at startup, but relay/quota/scheduler
-   triggers are not wired yet. Both switches stay off unless explicitly set.
+   requests. Free-channel exhaustion persists account state before relay
+   enqueue; confirmed exhausted quota refreshes enqueue only after releasing
+   their write locks and singleflight guard. Scheduler ticks sweep expiring
+   slots separately from plans. Paid-channel failures and protocol passthrough
+   never trigger reset spending. Both switches stay off unless explicitly set.
    The admin API validates all five settings and persists batches atomically.
    The legacy slot-lifetime helper is retained for API
    compatibility and is not suitable for the automatic reset service.

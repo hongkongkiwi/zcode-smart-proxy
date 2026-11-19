@@ -389,7 +389,22 @@ async fn refresh_core(
     if !quota.auth_failed && !quota.not_entitled {
         account.remaining = quota.remaining.unwrap_or(0.0);
     }
-    public_view(&db, account).map(RefreshOutcome::Applied)
+    let enqueue_reset = account.enabled
+        && account.status == "exhausted"
+        && !quota.auth_failed
+        && !quota.not_entitled
+        && quota.exhausted();
+    let view = public_view(&db, account)?;
+    drop(accounts);
+    drop(db);
+    // The reset worker shares quota admission and must see the committed snapshot.
+    drop(_flight);
+    if enqueue_reset {
+        if let Some(manager) = state.auto_reset() {
+            manager.enqueue(id, crate::autoreset::ResetTrigger::Quota);
+        }
+    }
+    Ok(RefreshOutcome::Applied(view))
 }
 
 fn refresh_matches(db: &rusqlite::Connection, state: &AppState, id: i64, expected: &str) -> bool {

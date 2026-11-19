@@ -183,6 +183,9 @@ impl Scheduler {
                 }
             }
         }
+        if let Some(manager) = self.shared.state.auto_reset() {
+            manager.sweep();
+        }
         Ok(claimed)
     }
 

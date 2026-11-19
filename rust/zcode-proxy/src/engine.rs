@@ -24,6 +24,7 @@ enum Attempt {
     /// Response is fully written (success or terminal error).
     Written(Response, i64),
     Streaming(reqwest::Response),
+    Exhausted,
     /// Try the next candidate; the account cools for `cool_secs` (0 = none).
     /// `soft` marks content-quality failures (challenge/captcha/risk) that
     /// balanced mode cascades to the same account's paid channel.
@@ -125,10 +126,7 @@ fn classify_to_attempt(
             cool_secs: 30,
             soft: false,
         },
-        FailureClass::Exhausted => Attempt::NextAccount {
-            cool_secs: 0,
-            soft: false,
-        },
+        FailureClass::Exhausted => Attempt::Exhausted,
         FailureClass::UpstreamError => {
             let msg = truncate(&body, 300);
             Attempt::Written(
@@ -346,10 +344,7 @@ async fn attempt_upstream(
             cool_secs: 60,
             soft: true,
         },
-        OkBodyClass::ExhaustedEnvelope => Attempt::NextAccount {
-            cool_secs: 0,
-            soft: false,
-        },
+        OkBodyClass::ExhaustedEnvelope => Attempt::Exhausted,
         OkBodyClass::ErrorEnvelope => Attempt::Written(
             (status, [("content-type", "application/json")], body).into_response(),
             0,
@@ -385,6 +380,59 @@ fn terminal_response(
         );
     }
     response
+}
+
+fn persist_exhausted(
+    state: &AppState,
+    id: i64,
+    expected: &Creds,
+) -> Result<bool, crate::store::StoreError> {
+    use rusqlite::OptionalExtension;
+
+    let db = state.db.lock().unwrap();
+    let mut accounts = state.accounts.lock().unwrap();
+    let creds = state.creds.lock().unwrap();
+    let Some(account) = accounts.iter_mut().find(|a| a.id == id) else {
+        return Ok(false);
+    };
+    if !account.enabled
+        || account.status == "disabled"
+        || account.zcode_jwt != expected.zcode_jwt
+        || account.api_key != expected.api_key
+        || !creds.get(&id).is_some_and(|current| {
+            current.zcode_jwt == expected.zcode_jwt && current.api_key == expected.api_key
+        })
+    {
+        return Ok(false);
+    }
+    let stored: Option<(bool, String, String, String)> = db
+        .query_row(
+            "SELECT enabled,status,zcode_jwt,api_key FROM accounts WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((enabled, status, jwt, key)) = stored else {
+        return Ok(false);
+    };
+    if !enabled
+        || status == "disabled"
+        || state.vault.decrypt(&jwt)? != expected.zcode_jwt
+        || state.vault.decrypt(&key)? != expected.api_key
+    {
+        return Ok(false);
+    }
+    // Publish only after the durable write, without replacing the quota snapshot.
+    let updated = db.execute(
+        "UPDATE accounts SET status='exhausted',cooling_until=0,last_error='quota exhausted' WHERE id=?1",
+        [id],
+    )?;
+    if updated == 0 {
+        return Ok(false);
+    }
+    account.status = "exhausted".into();
+    account.cooling_until = 0;
+    Ok(true)
 }
 
 /// POST /v1/messages (+ shape aliases): the free-first fallback ladder.
@@ -560,6 +608,26 @@ pub async fn handle_messages(
                         named.as_ref().map(|k| k.id).unwrap_or(0),
                     );
                 }
+                Attempt::Exhausted => {
+                    if phase == CHANNEL_FREE {
+                        match persist_exhausted(&state, acct.id, creds) {
+                            Ok(true) => {
+                                if let Some(manager) = state.auto_reset() {
+                                    manager.enqueue(acct.id, crate::autoreset::ResetTrigger::Relay);
+                                }
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                eprintln!("exhausted status persistence failed: {error}");
+                                return error_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "api_error",
+                                    "storage operation failed",
+                                );
+                            }
+                        }
+                    }
+                }
                 Attempt::NextAccount { cool_secs, soft } => {
                     if cool_secs > 0 {
                         state.accounts.lock().unwrap().iter_mut().for_each(|aa| {
@@ -623,7 +691,7 @@ pub async fn handle_messages(
                                             named.as_ref().map(|k| k.id).unwrap_or(0),
                                         )
                                     }
-                                    Attempt::NextAccount { .. } => {}
+                                    Attempt::NextAccount { .. } | Attempt::Exhausted => {}
                                 }
                             }
                         }
