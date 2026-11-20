@@ -194,6 +194,8 @@ fn validate_go_schema(db: &Connection) -> Result<(), ImportError> {
         ("gateway_keys", "id,name,key_hash,enabled,models,rpm_limit,rate_5h,rate_1d,rate_7d,quota_total,quota_used"),
         ("proxy_nodes", "id,name,type,host,port,username,password,is_default,group_name,enabled,check_status,check_latency,check_ip,check_msg,check_at,created_at,updated_at"),
         ("claim_records", "id,created_at,account_id,email,task_type,plan_id,plan_name,success,code,message,next_at,used_at"),
+        ("claim_plans", "id,plan_name,cron_expr,is_active,target_type,account_id,account_group,task_type,auto_pick,delay_seconds,last_run_at,last_run_status,last_run_msg,created_at,updated_at"),
+        ("plan_run_records", "id,plan_id,plan_name,task_type,target_type,account_id,run_at,status,message,total,success_count,fail_count,duration_ms"),
     ] {
         let kind: String = db.query_row("SELECT type FROM sqlite_schema WHERE name=?1", [table], |r| r.get(0))?;
         if kind != "table" { return Err(ImportError); }
@@ -323,6 +325,21 @@ fn project(
             r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, boolean(r,7)?, r.get::<_, i64>(8)?, r.get::<_, String>(9)?, r.get::<_, i64>(10)?, used_at
         ])?;
     }
+    let mut stmt = source.prepare("SELECT id,plan_name,cron_expr,is_active,target_type,account_id,account_group,task_type,auto_pick,delay_seconds,last_run_at,last_run_status,last_run_msg,created_at,updated_at FROM claim_plans")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        boolean(r, 3)?;
+        tx.execute("INSERT INTO claim_plans(id,plan_name,cron_expr,is_active,target_type,account_id,account_group,task_type,auto_pick,delay_seconds,last_run_at,last_run_status,last_run_msg,created_at,updated_at,imported_running) VALUES(?1,?2,?3,0,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?11='running')", params![
+            r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, i64>(8)?, r.get::<_, i64>(9)?, r.get::<_, String>(10)?, r.get::<_, String>(11)?, r.get::<_, String>(12)?, r.get::<_, String>(13)?, r.get::<_, String>(14)?
+        ])?;
+    }
+    let mut stmt = source.prepare("SELECT id,plan_id,plan_name,task_type,target_type,account_id,run_at,status,message,total,success_count,fail_count,duration_ms FROM plan_run_records")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        tx.execute("INSERT INTO plan_run_records(id,plan_id,plan_name,task_type,target_type,account_id,run_at,status,message,total,success_count,fail_count,duration_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)", params![
+            r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)?, r.get::<_, i64>(10)?, r.get::<_, i64>(11)?, r.get::<_, i64>(12)?
+        ])?;
+    }
     // Deleted IDs must not be reused, including history IDs whose projection is deferred.
     for table in [
         "accounts",
@@ -330,6 +347,8 @@ fn project(
         "usage_records",
         "proxy_nodes",
         "claim_records",
+        "claim_plans",
+        "plan_run_records",
     ] {
         let seq: Option<i64> = source
             .query_row(
@@ -341,11 +360,21 @@ fn project(
         if seq.is_some_and(|seq| seq < 0) {
             return Err(ImportError);
         }
-        let seq = if table == "claim_records" {
-            // Archive-only rows may have IDs raised by UPDATE without advancing sqlite_sequence.
+        let seq = if matches!(table, "claim_records" | "claim_plans" | "plan_run_records") {
+            // IDs raised by UPDATE do not advance sqlite_sequence.
             let max_id: Option<i64> =
-                source.query_row("SELECT max(id) FROM claim_records", [], |r| r.get(0))?;
+                source.query_row(&format!("SELECT max(id) FROM {table}"), [], |r| r.get(0))?;
             seq.into_iter().chain(max_id.filter(|id| *id > 0)).max()
+        } else {
+            seq
+        };
+        let seq = if table == "claim_plans" {
+            let max_plan_id: Option<i64> = source.query_row(
+                "SELECT max(plan_id) FROM plan_run_records WHERE plan_id > 0",
+                [],
+                |r| r.get(0),
+            )?;
+            seq.into_iter().chain(max_plan_id).max()
         } else {
             seq
         };

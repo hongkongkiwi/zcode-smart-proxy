@@ -47,8 +47,10 @@ fixtures. These checks do not establish Go feature parity.
    preserves a complete Go database archive and creates a separate encrypted
    runtime projection for accounts, settings, gateway keys, proxy nodes, and
    reset ledger records. The reset guard can see recent successful Go resets
-   after import. Historical usage, claim schedules, non-reset claim records,
-   and unknown metadata remain in the archive. Go's rolling request counters
+   after import. Claim schedules and run history are imported, but schedules
+   start paused to avoid replaying work across the switch. Historical usage,
+   non-reset claim records, and unknown metadata remain in the archive.
+   Go's rolling request counters
    live in memory and cannot be imported; a switch resets them just as a Go
    restart does. The explicit command is
    `zcode-proxy-rs import-go <source-db> <destination-dir>`, with the source vault

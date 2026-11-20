@@ -173,7 +173,8 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
             last_run_status TEXT NOT NULL DEFAULT '',
             last_run_msg TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+            imported_running INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_claim_plans_active ON claim_plans(is_active);
         CREATE TABLE IF NOT EXISTS plan_run_records (
@@ -271,6 +272,20 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
         }
     }
     drop(gateway_stmt);
+    let mut plan_stmt = conn.prepare("PRAGMA table_info(claim_plans)")?;
+    let plan_columns = plan_stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(plan_stmt);
+    if !plan_columns
+        .iter()
+        .any(|column| column == "imported_running")
+    {
+        conn.execute(
+            "ALTER TABLE claim_plans ADD COLUMN imported_running INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     conn.pragma_update(None, "application_id", RUST_APPLICATION_ID)?;
     drop(stmt);
     tx.commit()?;
@@ -937,7 +952,7 @@ pub(crate) fn claim_plan_minute(
     run_at: &str,
 ) -> Result<bool, StoreError> {
     Ok(conn.execute(
-        "UPDATE claim_plans SET last_run_at=?2,last_run_status='running',last_run_msg='执行中'
+        "UPDATE claim_plans SET last_run_at=?2,last_run_status='running',last_run_msg='执行中',imported_running=0
          WHERE id=?1 AND (last_run_at='' OR substr(last_run_at,1,16)<>substr(?2,1,16))",
         rusqlite::params![id, run_at],
     )? == 1)
@@ -951,7 +966,7 @@ pub(crate) fn update_claim_plan_run(
     run_at: &str,
 ) -> Result<(), StoreError> {
     conn.execute(
-        "UPDATE claim_plans SET last_run_at=?4,last_run_status=?2,last_run_msg=?3 WHERE id=?1",
+        "UPDATE claim_plans SET last_run_at=?4,last_run_status=?2,last_run_msg=?3,imported_running=0 WHERE id=?1",
         rusqlite::params![id, status, message, run_at],
     )?;
     Ok(())
@@ -1020,7 +1035,7 @@ pub(crate) fn reconcile_plan_runs(
         };
         let changed = tx.execute(
             "UPDATE claim_plans SET last_run_status='failed',last_run_msg='进程重启中断',last_run_at=?2
-             WHERE id=?1 AND last_run_status='running'",
+             WHERE id=?1 AND last_run_status='running' AND imported_running=0",
             rusqlite::params![plan.id,run_at],
         )?;
         if changed == 1 {
