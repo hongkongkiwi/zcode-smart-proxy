@@ -16,7 +16,8 @@ use zcode_core::openai::{
     completions_response, flatten_responses_body,
 };
 
-use crate::{auth::ResolvedKey, engine, state::AppState};
+use crate::openai_stream::Output;
+use crate::{auth::ResolvedKey, engine, openai_stream, state::AppState};
 
 fn error(status: StatusCode, message: &str) -> Response {
     (
@@ -48,12 +49,6 @@ fn contains_input_image(value: &Value) -> bool {
     }
 }
 
-enum Output {
-    Chat,
-    Completion { prompt: String, echo: bool },
-    Responses,
-}
-
 async fn relay(
     state: State<Arc<AppState>>,
     key: Extension<ResolvedKey>,
@@ -64,9 +59,36 @@ async fn relay(
 ) -> Response {
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     anthropic["stream"] = json!(stream);
+    let timings = state.stream_timings;
     let response = engine::handle_messages(state, key, headers, anthropic.to_string()).await;
-    if !response.status().is_success() || stream {
+    if !response.status().is_success() {
         return response;
+    }
+    if stream {
+        if !response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("text/event-stream"))
+        {
+            return error(
+                StatusCode::BAD_GATEWAY,
+                "upstream did not return an SSE stream",
+            );
+        }
+        let fallback = match &output {
+            Output::Chat => "gpt-4o",
+            Output::Completion { .. } => "gpt-3.5-turbo-instruct",
+            Output::Responses => "GLM-5.3",
+        };
+        let model = body["model"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(fallback);
+        let include_usage = body["stream_options"]["include_usage"]
+            .as_bool()
+            .unwrap_or(false);
+        return openai_stream::response(response, output, model.into(), include_usage, timings);
     }
     let bytes = match to_bytes(response.into_body(), 64 * 1024 * 1024).await {
         Ok(bytes) => bytes,

@@ -1,0 +1,59 @@
+{
+  "current": "zcb1:mX4v8pL1Z8hD+MTGUg8VovNAz270V3nEvgaEHgQ0bP39t3CUBUB33mxSgAaMJwZoSZ3wH/X4EKRP/Ul+wFeY50s7k9AuSJNsqVu36ibLekBNv0Gpcw1cSg1iKCC8lEUNfuKH/oyLDbW6fqsui5GgvK33tU52okCU5n+BfTjkAELytE7cOAQIsUN7YzVV/0bXc7J0LoOElGePgfwjfmK2pmAQBLndn2KOk3QnHyKn7ymZbS6vcPA4+M8gfT26mK0HaK/rcyWbmQPasDfiYAlnuSaOlo7WZjW2fxAzmzVdCocyGwN1r94WBkGlCHzdM4TuMuxULnYkNnKahFqsBE0hfqW/gCsK/k/hf5vBlipdzt3k/DOJveWYLKgoLQEku3/kVxcSfVhvUFjKBB1pgz3oUMbFYwMvAbd1FiGHjhFmPg7h/qFfj1p/gW2coxq1Gfa5u7mZgShaDJEeL4HSfHmxe7WzND5CNd9buqyUIf/laSz91bDixmjYWLIVRq0n08gTwJerl3DlwpO3ytvNu+bxpribPRzJhlgHUqDX6TU9J3ra6uF220LjdOJKM/GFyhCYJlg/8zzFEPvSBginqm+P6smpgcWi28WRvxNkT4R31kkVbIGF8cJJtlMLFRQMIbTn8wxbs/jPyaoxdBNzrb4g094l+mMsqcF/Rgedc7guZl2Zrqw6fNyId9bgXkbo2Oo2S6JGYJwmM03YwLKdHoNiDSLZ5nyIR0UiLkEgxNokiz99/FOd3rWCA8+H0Se/KNm5nnlqUcvBYaoIqMGgOCBwJg43fPyQfVtKYgjG68sjKc4Yvm1HUaQuMFw17ycepTr2zk3UocaMrO5dKw4dOb2PETUz2jCzomTgZVJsh16U7J+ZbngY2Jp5UQo/PwuCwZKK1rNgrp2ihoTJnmlQVNj+2X9VTuPMvkFvNVWXwGnlSQqxC0m7daEmRE4Knzq+NMt4/oHBEv0Q2Mkzaae2uo/+vEuVHEvWQm3jR5DxC5D7SuVQnkAwGyun4TfOmL5z/nWBsm1iwCMGYw7y9u1oIsZzxQ06muJfIamQrzSjZHNdVgd4/kLcVMlhd4IZCJNkBxCJojmCycQSZ3ou/bbs2tytUzi5bfbiDzYBEQfBCj7tTtUwhid/ljcvRt1j3JwxOdYGd1XmeCjzrtrPRS/Qg41IWEyusPhFkSgI+5aPTP09NLq0nbZ1wpxaj4Sc6wmjHAjbO3SRLD+tHxCeYRdtduaZKdLjO2gwlEj7gvzNXKI3QO2WWPBaaEGAOo9Adg03GVrrbktnXAT5CWv+FjrsnRlmpDCTE6yFl6ZwEdMmjGmZFaD1MrN2q8IM4kN2QTxO38CPVsnuRjiIY3ie8Na5J49Jc1s3Lv+97gc=",
+  "format": "zcb1: + standard padded base64(salt16 || nonce12 || AES256GCM ciphertext+tag16); PBKDF2SHA256(password UTF8,salt,rounds,32); no AAD",
+  "future_version": "zcb1:dvQehE5GgxuBk40MWkfvs88a8mniRv0oikTlMQNGBRB/OUvxZuROpWJwohPdHu7mxs++pVMZ/jWJol2yG0z2MQOtjjIQJkNWxtd9cvg1uL8q11/qLvTL0RyCRIKTKfmyxuuUE98Ymf2BeHxIglwmddP0V8uplosPoVk8BHOSFKOle+d6ttj7MsdjBxdbEWpqrpKZ9iaBjt8rj8VE5PTMXyyefV1gsFvgS5IuJXVnRTs8zNiRx5vx5+P/45I1K33ngabp4BKmA5dafpWiF6C5cuclzQ6HMEolBHV1cmWE5/+u86G6UH+7qil+AVSPewff8VZ/b3ILcObBjEYIbFvxWjqBqtESNLMnd3CriorWMbQ4qSESuZRDKfiiYT/cWqyG0JkiAxz9mNb8LQYwFBwI7CyuZJCzwKI5D6w6qTWlv8QxI0fnHjm9vL72ljreyr4TZdHKSWMbSoaIPB23+d6SsjyMwQOL8HLqmPeq3Wj76Eze4U4bgzbyaQgk/GnylR4GD7rmV63RYEd/j8kI8HSUDeUI3V3jowLKppRfIIs7CYA5vwrVVTvEmb0MwXku6aZh6DiCXBhZbn16J1l2MyvEzXP2D9w/76rmP5QhtxFHUWe/dxeBT7NTQRWgmChffMQdDDZqjwN6wYxipaNra9kb5Jm+cFhDgQszC4HdvUW1EYi/y7hZqdNODvflLtNF8bpakRrZopms5g4nqUf0grZ5oWAokQMacMzRhzZg+fnWnXTZKgA77zrCzaN5t3GB4rnujQQZrZvVLOyiUZzVbnP70RWphijmelmAYk14Wjkz0xIYTPkhPAvt08vkl1kJp/YeZCTsP2GCp2OVtHR42ZX/rjmyAlyl/Uu/wgpiuqATu5P0jrUvJ5+SoLA2Z+Gt9/jo3EHZZ6Yyvd4w8ssYo97KlT9IqRTDYoOdtr3Wft/79SLZq3BFIcXScUVLtG2uJadOYornDfRWAhlsz9XlDiXNvMbuhk+w19Jsu6f379VW9skROY+2nZH4Pq6CffPISkhYqp5zI/HAtbO71P3dEhh5YNtlum01vKUg5Hg8jaYrgRoDT3UzAtdqQfofaT0DN4um0w4Ld1q5hElPmgUtgYXPyONsBuTUsGM7pjJM1unvkpy2fmB4phSXy8jrAM4iE6VJWv19bxqSl4mbfuLsNvBeKXD2EK62PcElrPgvrnywm9GvkJ9LSu9UHsTWnM2GT3op4WPVh+GtzhLLjbbjdDxhvZ9J+DI8+zDiycc6nA+G+OfC+41AaK39N2M65YNwThqS4CJzdrxxoVqsx4Dfth3XQeAIRFuLyB82XMyVU/tJogd9BmKPScRjDtcVnMr+ZJvUuUQP/o6gBwFZaonuzkqzqtZ1FZMOiMA=",
+  "invalid_json": "zcb1:ZT0Rk0H7ZH85IWacjtVvPwZyTiaZ04SqosXmI7gQHZmIAhA4DSuQ5SuS/137",
+  "legacy": "zcb1:5dFgJ+zufgvwjz7IwlipOiIa4Idh2o2FnaEp8Yo3zIKBIz4y8MbXb8o8xIMQfu5C+6acd36lb7YA3v0ukv3kzsLRNvXzqGOJ8AZX9UNfnEAoRjNtI/PF1/tJ6ElwDSK1CqRLJJDF8eFJXwnPPdpe0KH86Xu0BSOy1t7E399NcyQzoW1iARZpgafNlHx62yeLs/3IQR0ISiyyYMhopJ5KJ6BOxKtFSaQpHGZrH2sWrEWfDAOOtd2ne6ftO7+VA2xxsu3caLEYcfWT1JaEStC4V/JxZaHPt0ScAukXPp8gTfA1rK6bMYdlXTK0oTHqRvvva7Q29NiFka3xrQ286AOU0wPH04C4wOu/cV2z5c4xwioCR2lgAqTFyX3Rl5ONdjo3cL57RvWNCo7nXSlmR3FN0NYzvWWra8moXwh74n2vefa5P9WK+1Fz4aXZlazoOuzhvgssE5T7fjqb2ciPcUM0l5mOS/czgldfUNutLTy8OwT163MtaS6Aqv3lsdIOyGwRoVwxh1DNUh3+PTkwGeyDlY2K5dvkieFBT9LPXCyQ55RiDcb0D86oWvvULDVdZjyqHbAsq0qBVwhzEnr5LyPSvFm2IQn9k94qsfAvDps02z2iVhlDiNR1j3mHobF1bsDcfGpaVTfR+KQSh6oE0iVwqqOBQ8fLCocokETBnUbX1MthojDeUQ6woQsqkksCE59Wgxxkep0YTE5qQolpD4kwqrvH1mlFRXnAqaynMOJSpe7sGuvHr9XoJT/kLjdfkVTkZhId7vBxbmwPrR0Ca4Ms7BdNaMP8A0vozfwKvZ/duvTg8K9byGJrVYmY127zbwWhm/isiBpNevmKigE9YPlwS4llG1ipyPb1bm2kRTNiD80rD68kLsroQQy4TJsP8UZLirTXhXBm50jjkvUK1xCFtccg1NFIBJkQC00YrZEg9mXMhDvzsq/KcV1BA3/4oCP5wVaf8tTmrKIX5N3GioAavDa6CX0tWzS8dc3TvSfrTxU1Qibi4EGUVIusQ6twWstrBgQGkoBz1R54VnGkm7thydv0c+iqW/XaRz89iLchN0ENyvL3JlTKLSCTuaJDXtOcDYGh+dFjOTK4y4gqt0lVezUnQBiH0yrBPdy11x5IEfFrnYPE2QIEhB1f2ArF6fa2V+6xKina0ekQot29EfgLMivOdkn1h1BlL1xzBLtWdeFZ5fbAniJHdjjacymsUG1YWY9dhH9VSclmMHomPzh37JUWa5svdsthAZ8AKswcCZPvuJqoEASL37hnq8ALA6NW3TGrKvbbKO8jn6QJGwnD3rKV7osYlVTCrgLafKDgQvIDic0mVJvMsyZD688iLxQX8BtNcxYF1wdDqqq2POnV1QKwB8xQ+U0=",
+  "notice": "PUBLIC SYNTHETIC TEST DATA ONLY. Never use these credentials outside tests.",
+  "password": "PUBLIC bundle password: café 测试",
+  "payload": {
+    "accounts": [
+      {
+        "access_token": "PUBLIC-go-access-a",
+        "account_group": "eu,failover",
+        "api_key": "PUBLIC-go-bundle-key-a",
+        "auth_type": "jwt",
+        "creds_raw": "PUBLIC-snapshot-a",
+        "device_mid": "PUBLIC-device-a",
+        "display_name": "PUBLIC A",
+        "email": "shared@example.invalid",
+        "provider": "zai",
+        "refresh_token": "PUBLIC-go-refresh-a",
+        "remark": "PUBLIC note: 测试",
+        "user_id": "PUBLIC-bundle-user-a",
+        "user_info": "{\"public\":true}",
+        "zcode_jwt": "PUBLIC-go-bundle-jwt-a"
+      },
+      {
+        "account_group": "backup",
+        "api_key": "PUBLIC-go-bundle-key-b",
+        "auth_type": "apikey",
+        "display_name": "PUBLIC B",
+        "email": "shared@example.invalid",
+        "provider": "zai",
+        "remark": "PUBLIC second note",
+        "user_id": "PUBLIC-bundle-user-b",
+        "zcode_jwt": "PUBLIC-go-bundle-jwt-b"
+      },
+      {
+        "auth_type": "",
+        "display_name": "",
+        "email": "skip-no-user@example.invalid",
+        "provider": "",
+        "user_id": "",
+        "zcode_jwt": "PUBLIC-invalid-user-jwt"
+      },
+      {
+        "auth_type": "",
+        "display_name": "",
+        "email": "skip-no-credential@example.invalid",
+        "provider": "",
+        "user_id": "PUBLIC-skip-no-credential"
+      }
+    ],
+    "version": 1
+  },
+  "producer": "Unchanged copy of export_bundle.go at ee3001afc16fbf8902efa49f6d3649482fabff7d, isolated Go file-list test with in-memory AccountManager/database stubs. Current generated by ExportBundle; legacy and negative authenticated payloads by bundleGCM. This validates wire codec only, not Go SQL, at-rest encryption, routes or auth.",
+  "source_revision": "ee3001afc16fbf8902efa49f6d3649482fabff7d",
+  "source_sha256": "e476107c13dfc3165beb20cd39b8c655ea23504f973672665613aec4cca7dee0"
+}

@@ -133,7 +133,19 @@ fn sha256_hex_code(s: &str) -> String {
 /// updated list minus the consumed code (single-use).
 pub fn consume_recovery_code(hashes: &[String], code: &str) -> Option<Vec<String>> {
     let h = sha256_hex_code(code);
-    let idx = hashes.iter().position(|x| *x == h)?;
+    let normalized = code
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| match c {
+            '-' | ' ' => None,
+            '0' => Some('o'),
+            '1' | 'i' => Some('l'),
+            c => Some(c),
+        })
+        .collect::<String>();
+    let go_hash = sha256_hex_code(&normalized);
+    let idx = hashes.iter().position(|x| *x == h || *x == go_hash)?;
     let mut rest = hashes.to_vec();
     rest.remove(idx);
     Some(rest)

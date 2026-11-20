@@ -426,7 +426,7 @@ async fn totp_second_factor_flow() {
     // Confirm with the current code (computed locally from the secret).
     let secret = zcode_core::base32_decode(&secret_b32).unwrap();
     let code = zcode_core::totp_now(&secret, zcode_proxy::auth::now_secs());
-    let confirm_body = json!({"code": code}).to_string();
+    let confirm_body = json!({"code": code, "current_password": password}).to_string();
     let req3 = Request::builder()
         .method("POST")
         .uri("/api/auth/totp/confirm")
@@ -443,7 +443,8 @@ async fn totp_second_factor_flow() {
     assert_eq!(v3["enabled"], true);
     assert_eq!(v3["recovery_codes"].as_array().unwrap().len(), 10);
 
-    // Logout, then password-only login must be rejected (second factor).
+    // Logout. Go stages any enabled second factor, so a password-only login
+    // returns a challenge rather than a session (auth.go:640-654).
     let req4 = Request::builder()
         .method("POST")
         .uri("/api/logout")
@@ -455,12 +456,24 @@ async fn totp_second_factor_flow() {
 
     let pw_only = json!({"password": password}).to_string();
     let (s5, body5) = send(app.clone(), "POST", "/api/login", "", &pw_only).await;
-    assert_eq!(s5, StatusCode::UNAUTHORIZED);
-    assert!(body5["message"].as_str().unwrap().contains("second factor"));
+    assert_eq!(s5, StatusCode::OK);
+    assert_eq!(body5["two_factor_required"], true);
+    let challenge = body5["challenge"].as_str().unwrap().to_string();
+    assert!(body5["methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m == "totp"));
 
-    // Login with the current TOTP code: accepted.
+    // Completing the staged challenge with the current code issues a session.
     let code2 = zcode_core::totp_now(&secret, zcode_proxy::auth::now_secs());
-    let with_code = json!({"password": password, "code": code2}).to_string();
-    let (s6, _body6) = send(app, "POST", "/api/login", "", &with_code).await;
+    let challenge_body = json!({"challenge": challenge, "code": code2}).to_string();
+    let (s6, _body6) = send(app.clone(), "POST", "/api/login/totp", "", &challenge_body).await;
     assert_eq!(s6, StatusCode::OK);
+
+    // An inline code in the login body remains accepted.
+    let code3 = zcode_core::totp_now(&secret, zcode_proxy::auth::now_secs());
+    let with_code = json!({"password": password, "code": code3}).to_string();
+    let (s7, _body7) = send(app, "POST", "/api/login", "", &with_code).await;
+    assert_eq!(s7, StatusCode::OK);
 }

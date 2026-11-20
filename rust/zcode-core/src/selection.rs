@@ -207,8 +207,9 @@ impl Selector {
         let mut pool = pool.to_vec();
         if self.config.strategy == STRATEGY_PRIORITY {
             // Cascade: keep only the best (lowest) priority tier.
-            let min_pri = pool.iter().map(|a| a.priority).min().unwrap_or(0);
-            pool.retain(|a| a.priority == min_pri);
+            let priority = |a: &&AccountView| if a.priority > 0 { a.priority } else { 100 };
+            let min_pri = pool.iter().map(priority).min().unwrap_or(100);
+            pool.retain(|a| priority(a) == min_pri);
         }
         match self.config.strategy.as_str() {
             STRATEGY_BEST_QUOTA => {

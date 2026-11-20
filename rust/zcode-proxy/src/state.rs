@@ -1,7 +1,7 @@
 //! Shared service state for the Rust data plane.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use crate::store;
 use zcode_core::{AccountView, GwRpmTracker, GwWindowTracker, Selector, StrategyConfig};
@@ -30,17 +30,158 @@ pub struct UpstreamUrls {
 }
 
 #[derive(Clone)]
+pub struct ManagementUrls {
+    pub billing_base: String,
+    pub quota_limit: String,
+    pub subscription: String,
+    pub oauth_token: String,
+    pub app_version: String,
+}
+
+impl Default for ManagementUrls {
+    fn default() -> Self {
+        Self {
+            billing_base: "https://zcode.z.ai/api/v1/zcode-plan".into(),
+            quota_limit: "https://api.z.ai/api/monitor/usage/quota/limit".into(),
+            subscription: "https://api.z.ai/api/biz/subscription/list".into(),
+            oauth_token: "https://zcode.z.ai/api/v1/oauth/token".into(),
+            app_version: "3.14.4".into(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AutomationUrls {
+    pub billing_preview: String,
+    pub billing_claim: String,
+    pub event_report: String,
+    pub reset_status: String,
+    pub reset_use: String,
+    pub captcha_scene: String,
+    pub captcha_prefix: String,
+    pub captcha_region: String,
+}
+
+impl Default for AutomationUrls {
+    fn default() -> Self {
+        Self {
+            billing_preview: "https://zcode.z.ai/api/v1/zcode-plan/billing/preview".into(),
+            billing_claim: "https://zcode.z.ai/api/v1/zcode-plan/billing/claim".into(),
+            event_report: "https://zcode.z.ai/api/v1/event/report".into(),
+            reset_status: "https://zcode.z.ai/api/v1/coding-plan/reset/status".into(),
+            reset_use: "https://zcode.z.ai/api/v1/coding-plan/reset/use".into(),
+            // Go discovers these from client/configs; unknown configuration cannot solve a CAPTCHA.
+            captcha_scene: String::new(),
+            captcha_prefix: String::new(),
+            captcha_region: String::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct OAuthUrls {
+    pub authorize: String,
+    pub userinfo: String,
+    pub business_login: String,
+    pub customer_info: String,
+    pub project_keys_base: String,
+    pub manual_redirect: String,
+    pub callback_url: String,
+    pub flow_ttl: std::time::Duration,
+}
+
+impl Default for OAuthUrls {
+    fn default() -> Self {
+        Self {
+            authorize: "https://chat.z.ai/api/oauth/authorize".into(),
+            userinfo: "https://chat.z.ai/api/oauth/userinfo".into(),
+            business_login: "https://api.z.ai/api/auth/z/login".into(),
+            customer_info: "https://api.z.ai/api/biz/customer/getCustomerInfo".into(),
+            project_keys_base: "https://api.z.ai/api/biz/v1/organization".into(),
+            manual_redirect: "https://zcode.z.ai/login".into(),
+            callback_url: "http://127.0.0.1:8787/oauth/callback".into(),
+            flow_ttl: std::time::Duration::from_secs(600),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PollOAuthUrls {
+    pub init: String,
+    pub poll_base: String,
+    pub interval_override: Option<std::time::Duration>,
+    pub flow_ttl: std::time::Duration,
+}
+
+impl Default for PollOAuthUrls {
+    fn default() -> Self {
+        Self {
+            init: "https://zcode.z.ai/api/v1/oauth/cli/init".into(),
+            poll_base: "https://zcode.z.ai/api/v1/oauth/cli/poll".into(),
+            interval_override: None,
+            flow_ttl: std::time::Duration::from_secs(300),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Creds {
     pub zcode_jwt: String,
     pub api_key: String,
 }
 
+#[derive(Clone, Copy)]
+pub struct StreamTimings {
+    pub heartbeat_interval: std::time::Duration,
+    pub silence_timeout: std::time::Duration,
+}
+
+impl Default for StreamTimings {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: std::time::Duration::from_secs(15),
+            silence_timeout: std::time::Duration::from_secs(120),
+        }
+    }
+}
+
 pub struct AppState {
-    /// Root key plaintext (empty = named keys only).
+    /// Constructor seed only; the authoritative value is behind `root_key()`.
     pub root_key: String,
+    root_key_live: RwLock<String>,
+    root_key_publication: Mutex<RootKeyPublication>,
     pub upstream: UpstreamUrls,
+    pub management: ManagementUrls,
+    pub offpeak_control_base: String,
+    pub offpeak_origin: String,
+    pub highspeed: crate::highspeed::HighspeedConfig,
+    pub(crate) highspeed_cards: crate::highspeed::CardManager,
+    pub proxy_diagnostics: crate::proxy_diagnostics::ProxyDiagnosticsConfig,
+    pub install_urls: crate::install_sequence::InstallUrls,
+    pub install_reporting_enabled: bool,
+    pub automation: AutomationUrls,
+    pub captcha: crate::captcha::CaptchaService,
+    pub automation_solver: std::sync::Arc<dyn zcode_core::egress::CaptchaSolver>,
+    pub(crate) automation_inflight: Mutex<std::collections::HashSet<i64>>,
+    pub(crate) reset_history_synced_at: Mutex<HashMap<i64, std::time::Instant>>,
+    pub(crate) reset_spend_guard: zcode_core::autoreset::SpendGuard,
+    auto_reset: Mutex<Option<std::sync::Weak<crate::autoreset::AutoReset>>>,
+    pub(crate) scheduler: Mutex<Option<std::sync::Weak<crate::scheduler::Scheduler>>>,
+    background_refresh:
+        Mutex<Option<std::sync::Weak<crate::background_refresh::BackgroundRefresh>>>,
+    pub oauth: OAuthUrls,
+    pub oauth_poll: PollOAuthUrls,
+    pub local_client_dir: Option<std::path::PathBuf>,
+    /// An explicit credential file confines local import to it and its siblings.
+    pub local_credentials_path: Option<std::path::PathBuf>,
+    pub local_credentials_secret: Option<zeroize::Zeroizing<String>>,
+    pub(crate) oauth_flows: Mutex<crate::account_oauth::FlowStore>,
+    pub(crate) quota_refresh_inflight: Mutex<std::collections::HashSet<i64>>,
+    pub(crate) token_refresh_attempts: Mutex<HashMap<i64, std::time::Instant>>,
+    pub stream_timings: StreamTimings,
     /// SQLite persistence (single connection, Go serialized-writer parity).
     pub db: Mutex<rusqlite::Connection>,
+    pub vault: crate::vault::Vault,
     pub accounts: Mutex<Vec<AccountView>>,
     pub creds: Mutex<HashMap<i64, Creds>>,
     pub named_keys: Mutex<Vec<NamedKey>>,
@@ -52,11 +193,24 @@ pub struct AppState {
     pub sessions: Mutex<HashMap<String, i64>>,
     /// Login lockout (bounded per-client failure tracking, admin.rs).
     pub login_guard: Mutex<crate::admin::LoginGuard>,
+    /// Step-up failures use peer/action buckets independent of login lockout.
+    pub(crate) step_up_guard: Mutex<crate::admin::LoginGuard>,
+    pub passkey_ticket_ttl: std::time::Duration,
+    pub(crate) webauthn_rp: Mutex<Option<crate::passkey::RpConfig>>,
+    pub(crate) passkey_flows: Mutex<crate::passkey::FlowStore>,
     /// Rolling in-memory usage log (parity with recordUsage for E2E checks).
     pub usage: Mutex<Vec<UsageRecord>>,
 }
 
 pub const MAX_MEMORY_USAGE_RECORDS: usize = 1024;
+
+/// Serializes root-key reads and writes so publication order matches commit order.
+struct RootKeyPublication {
+    last_success: std::time::Instant,
+}
+
+/// A rotated root key reaches other instances within this window.
+const ROOT_KEY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct UsageRecord {
@@ -80,6 +234,71 @@ impl UsageRecord {
 }
 
 impl AppState {
+    #[allow(clippy::result_unit_err)] // The slot contract only distinguishes a live occupant.
+    pub fn set_auto_reset(
+        &self,
+        worker: std::sync::Arc<crate::autoreset::AutoReset>,
+    ) -> Result<(), ()> {
+        let mut slot = self.auto_reset.lock().unwrap();
+        if slot.as_ref().and_then(std::sync::Weak::upgrade).is_some() {
+            return Err(());
+        }
+        *slot = Some(std::sync::Arc::downgrade(&worker));
+        Ok(())
+    }
+
+    pub fn auto_reset(&self) -> Option<std::sync::Arc<crate::autoreset::AutoReset>> {
+        self.auto_reset
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
+    #[allow(clippy::result_unit_err)] // The public slot contract only distinguishes a live occupant.
+    pub fn set_background_refresh(
+        &self,
+        worker: std::sync::Arc<crate::background_refresh::BackgroundRefresh>,
+    ) -> Result<(), ()> {
+        let mut slot = self.background_refresh.lock().unwrap();
+        if slot.as_ref().and_then(std::sync::Weak::upgrade).is_some() {
+            return Err(());
+        }
+        *slot = Some(std::sync::Arc::downgrade(&worker));
+        Ok(())
+    }
+
+    pub fn background_refresh(
+        &self,
+    ) -> Option<std::sync::Arc<crate::background_refresh::BackgroundRefresh>> {
+        self.background_refresh
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
+    #[allow(clippy::result_unit_err)] // The public slot contract only distinguishes a live occupant.
+    pub fn set_scheduler(
+        &self,
+        scheduler: std::sync::Arc<crate::scheduler::Scheduler>,
+    ) -> Result<(), ()> {
+        let mut slot = self.scheduler.lock().unwrap();
+        if slot.as_ref().and_then(std::sync::Weak::upgrade).is_some() {
+            return Err(());
+        }
+        *slot = Some(std::sync::Arc::downgrade(&scheduler));
+        Ok(())
+    }
+
+    pub fn scheduler(&self) -> Option<std::sync::Arc<crate::scheduler::Scheduler>> {
+        self.scheduler
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     /// Default upstream URLs, overridable via env (service layer wiring).
     pub fn upstream_from_env() -> UpstreamUrls {
         UpstreamUrls {
@@ -91,18 +310,23 @@ impl AppState {
         }
     }
 
-    /// Build state from a DB connection: load settings, accounts, keys.
+    /// Legacy fixture constructor with an ephemeral key. Encrypted databases must
+    /// use try_from_db_with_vault with their persisted key instead.
     pub fn from_db(root_key: String, upstream: UpstreamUrls, db: rusqlite::Connection) -> Self {
-        let settings: HashMap<String, String> = {
-            let mut stmt = db
-                .prepare("SELECT key, value FROM settings")
-                .expect("settings prepare");
-            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .expect("settings query")
-                .filter_map(Result::ok)
-                .collect()
-        };
-        let rows = store::list_accounts(&db);
+        let vault = crate::vault::Vault::ephemeral().expect("generate ephemeral vault");
+        Self::try_from_db_with_vault(root_key, upstream, db, vault)
+            .expect("load database: encrypted stores require an explicit persisted vault")
+    }
+
+    pub fn try_from_db_with_vault(
+        root_key: String,
+        upstream: UpstreamUrls,
+        db: rusqlite::Connection,
+        vault: crate::vault::Vault,
+    ) -> Result<Self, store::StoreError> {
+        store::check_schema(&db)?;
+        let settings = store::load_settings(&db, &vault)?;
+        let rows = store::load_accounts(&db, &vault)?;
         let mut accounts = Vec::new();
         let mut creds = HashMap::new();
         for (a, jwt, key) in rows {
@@ -115,11 +339,50 @@ impl AppState {
             );
             accounts.push(a);
         }
-        let named_keys = store::list_gateway_keys(&db);
-        Self {
-            root_key,
+        let named_keys = store::try_list_gateway_keys(&db)?
+            .into_iter()
+            .map(|row| row.key)
+            .collect();
+        // A persisted rotation wins; the constructor argument is only a seed.
+        let live_root_key = match settings.get("api_key") {
+            Some(value) if !value.is_empty() => value.clone(),
+            _ => root_key.clone(),
+        };
+        Ok(Self {
+            root_key: root_key.clone(),
+            root_key_live: RwLock::new(live_root_key),
+            root_key_publication: Mutex::new(RootKeyPublication {
+                last_success: std::time::Instant::now(),
+            }),
             upstream,
+            management: ManagementUrls::default(),
+            offpeak_control_base: "https://zcode.z.ai/api/v1/off-peak".into(),
+            offpeak_origin: "https://zcode.z.ai".into(),
+            highspeed: crate::highspeed::HighspeedConfig::default(),
+            highspeed_cards: crate::highspeed::CardManager::default(),
+            proxy_diagnostics: crate::proxy_diagnostics::ProxyDiagnosticsConfig::default(),
+            install_urls: crate::install_sequence::InstallUrls::default(),
+            install_reporting_enabled: false,
+            automation: AutomationUrls::default(),
+            captcha: crate::captcha::CaptchaService::default(),
+            automation_solver: std::sync::Arc::new(zcode_core::egress::NoopSolver),
+            automation_inflight: Mutex::new(std::collections::HashSet::new()),
+            reset_history_synced_at: Mutex::new(HashMap::new()),
+            reset_spend_guard: zcode_core::autoreset::SpendGuard::default(),
+            auto_reset: Mutex::new(None),
+            scheduler: Mutex::new(None),
+            background_refresh: Mutex::new(None),
+            oauth: OAuthUrls::default(),
+            oauth_poll: PollOAuthUrls::default(),
+            local_client_dir: None,
+            local_credentials_path: None,
+            local_credentials_secret: None,
+            oauth_flows: Mutex::new(crate::account_oauth::FlowStore::default()),
+            quota_refresh_inflight: Mutex::new(std::collections::HashSet::new()),
+            token_refresh_attempts: Mutex::new(HashMap::new()),
+            stream_timings: StreamTimings::default(),
             db: Mutex::new(db),
+            vault,
             accounts: Mutex::new(accounts),
             creds: Mutex::new(creds),
             named_keys: Mutex::new(named_keys),
@@ -129,29 +392,110 @@ impl AppState {
             windows: Mutex::new(GwWindowTracker::default()),
             sessions: Mutex::new(HashMap::new()),
             login_guard: Mutex::new(crate::admin::LoginGuard::default()),
+            step_up_guard: Mutex::new(crate::admin::LoginGuard::default()),
+            passkey_ticket_ttl: std::time::Duration::from_secs(300),
+            webauthn_rp: Mutex::new(None),
+            passkey_flows: Mutex::new(crate::passkey::FlowStore::default()),
             usage: Mutex::new(Vec::new()),
-        }
+        })
     }
 
     pub fn new(root_key: String, upstream: UpstreamUrls) -> Self {
-        Self {
-            root_key,
-            upstream,
-            db: Mutex::new(store::open(":memory:")),
-            accounts: Mutex::new(Vec::new()),
-            creds: Mutex::new(HashMap::new()),
-            named_keys: Mutex::new(Vec::new()),
-            settings: Mutex::new(HashMap::new()),
-            selector: Mutex::new(Selector::new(StrategyConfig::default())),
-            rpm: Mutex::new(GwRpmTracker::default()),
-            windows: Mutex::new(GwWindowTracker::default()),
-            sessions: Mutex::new(HashMap::new()),
-            login_guard: Mutex::new(crate::admin::LoginGuard::default()),
-            usage: Mutex::new(Vec::new()),
+        Self::from_db(root_key, upstream, store::open(":memory:"))
+    }
+
+    /// Writers hold DB then settings through commit and mirror publication.
+    pub fn persist_settings(&self, values: &[(&str, &str)]) -> Result<(), store::StoreError> {
+        let mut db = self.db.lock().unwrap();
+        let mut settings = self.settings.lock().unwrap();
+        self.persist_settings_locked(&mut db, &mut settings, values)
+    }
+
+    pub(crate) fn persist_settings_locked(
+        &self,
+        db: &mut rusqlite::Connection,
+        settings: &mut HashMap<String, String>,
+        values: &[(&str, &str)],
+    ) -> Result<(), store::StoreError> {
+        // Normalize supplied envelopes too: mirrors always contain plaintext.
+        let plain: Vec<_> = values
+            .iter()
+            .map(|&(key, value)| {
+                let value = if store::sensitive_setting(key) {
+                    self.vault.decrypt(value)?
+                } else {
+                    value.to_owned()
+                };
+                Ok((key, value))
+            })
+            .collect::<Result<_, store::StoreError>>()?;
+        store::persist_settings(db, &self.vault, values)?;
+        for (key, value) in plain {
+            settings.insert(key.to_owned(), value);
         }
+        Ok(())
+    }
+
+    pub fn consume_recovery_code(&self, code: &str) -> Result<bool, store::StoreError> {
+        let mut db = self.db.lock().unwrap();
+        let mut settings = self.settings.lock().unwrap();
+        let hashes = zcode_core::recovery_codes_from_json(
+            settings.get("recovery_codes").map(String::as_str),
+        );
+        let Some(rest) = zcode_core::consume_recovery_code(&hashes, code) else {
+            return Ok(false);
+        };
+        let value = zcode_core::recovery_codes_to_json(&rest);
+        self.persist_settings_locked(&mut db, &mut settings, &[("recovery_codes", &value)])?;
+        Ok(true)
     }
 
     pub fn setting(&self, key: &str) -> Option<String> {
         self.settings.lock().unwrap().get(key).cloned()
+    }
+
+    /// Current root key plaintext (empty = named keys only).
+    pub fn root_key(&self) -> String {
+        self.root_key_live.read().unwrap().clone()
+    }
+
+    /// Publish a rotated root key after its durable write succeeds.
+    pub fn set_root_key(&self, key: String) {
+        *self.root_key_live.write().unwrap() = key;
+    }
+
+    /// Persist and publish a rotated root key under the publication lock, so a
+    /// concurrent refresh cannot publish an older snapshot after this commit.
+    pub fn rotate_root_key(&self, key: &str) -> Result<(), store::StoreError> {
+        let mut publication = self.root_key_publication.lock().unwrap();
+        self.persist_settings(&[("api_key", key)])?;
+        self.set_root_key(key.to_owned());
+        publication.last_success = std::time::Instant::now();
+        Ok(())
+    }
+
+    /// A rotated key stops authenticating within one second on every instance sharing the database; an unreadable stored key fails root-key authentication closed.
+    pub fn refresh_root_key(&self) -> bool {
+        let mut publication = self.root_key_publication.lock().unwrap();
+        if publication.last_success.elapsed() < ROOT_KEY_REFRESH_INTERVAL {
+            return true;
+        }
+        let stored = {
+            let db = self.db.lock().unwrap();
+            crate::store::load_setting(&db, &self.vault, "api_key")
+        };
+        let Ok(stored) = stored else {
+            return false;
+        };
+        let stored = stored.unwrap_or_default();
+        if !stored.is_empty() && stored != self.root_key() {
+            self.settings
+                .lock()
+                .unwrap()
+                .insert("api_key".into(), stored.clone());
+            self.set_root_key(stored);
+        }
+        publication.last_success = std::time::Instant::now();
+        true
     }
 }

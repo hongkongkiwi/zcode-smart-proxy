@@ -49,6 +49,9 @@ ssh root@157.245.158.183 'cd /opt/zcode-proxy && docker compose stop \
 
 ## Update procedure
 
+These steps update the Go service. For a Rust trial or migration, follow the
+[Rust cutover checklist](rust-cutover.md) and use a separate data volume.
+
 From the repo root:
 
 ```bash

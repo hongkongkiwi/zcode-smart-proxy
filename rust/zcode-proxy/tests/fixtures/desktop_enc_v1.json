@@ -1,0 +1,80 @@
+{
+  "derived_key_hex": "bbb71e5811aeff864871240466f638cb6efbbf87ed14878f2d5486a431ee8ad3",
+  "format": "enc:v1: + unpadded base64url(nonce12) + . + unpadded base64url(tag16) + . + unpadded base64url(ciphertext); AES-256-GCM, no AAD",
+  "invalid": [
+    {
+      "id": "wrong_key",
+      "value": "enc:v1:J6KcI960CV_7y7_H.azzYfBr98q8Mdi8CDFqglQ.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ",
+      "wrong_secret": true
+    },
+    {
+      "id": "tampered_tag",
+      "value": "enc:v1:J6KcI960CV_7y7_H.ajzYfBr98q8Mdi8CDFqglQ.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ",
+      "wrong_secret": false
+    },
+    {
+      "id": "prefix_only",
+      "value": "enc:v1:",
+      "wrong_secret": false
+    },
+    {
+      "id": "extra_segment",
+      "value": "enc:v1:J6KcI960CV_7y7_H.azzYfBr98q8Mdi8CDFqglQ.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ.extra",
+      "wrong_secret": false
+    },
+    {
+      "id": "nonce_encoding",
+      "value": "enc:v1:!.azzYfBr98q8Mdi8CDFqglQ.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ",
+      "wrong_secret": false
+    },
+    {
+      "id": "nonce_length",
+      "value": "enc:v1:AA.azzYfBr98q8Mdi8CDFqglQ.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ",
+      "wrong_secret": false
+    },
+    {
+      "id": "tag_length",
+      "value": "enc:v1:J6KcI960CV_7y7_H.AA.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ",
+      "wrong_secret": false
+    },
+    {
+      "id": "padded_nonce",
+      "value": "enc:v1:J6KcI960CV_7y7_H=.azzYfBr98q8Mdi8CDFqglQ.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ",
+      "wrong_secret": false
+    }
+  ],
+  "key_derivation": "SHA-256 of literal UTF-8 secret bytes, including leading and trailing spaces; no hex decoding or trimming",
+  "notice": "PUBLIC SYNTHETIC TEST DATA ONLY. All secrets, nonces, tags and plaintexts may be published. Never use these keys outside tests.",
+  "producer": "Production EncryptCredential and DecryptCredential from credential_crypto.go at babffde; isolated file-list Go test, network disabled, explicit public secrets only. Random nonces generated once and recorded.",
+  "source_sha256": {
+    "credential_crypto.go": "ad273d6e3bf9664704de6695fe9ef4e207bc17e2324a12c318cec7ae295a82a0"
+  },
+  "secret": " PUBLIC TEST ONLY: 密钥 café ",
+  "vectors": {
+    "access": {
+      "value": "enc:v1:J6KcI960CV_7y7_H.azzYfBr98q8Mdi8CDFqglQ.x1bhIfzOkpU0ivu0PKDPUzPw5BINuWNbtKemOydY60yrnKncWIjJ",
+      "plaintext": "PUBLIC TEST ONLY: desktop access 凭证"
+    },
+    "access_jwt": {
+      "value": "enc:v1:PRab7_Be3ohriE5s.7Cqe79dVgLeEYoPXyqI0Qw.fq0D1hiUD5bHaETclx7vpe-jlAe5AketHJePjZSym3jAJp3sp_f__GScqZrh6mV_wXGCsKkoXfr3Xl2tEoAlYuugKQ7b47f5BU2g1fVOcV1i45aCNMQ",
+      "plaintext": "e30.eyJzdWIiOiJQVUJMSUMtZGVza3RvcC1hY2Nlc3MtaWRlbnRpdHkifQ.PUBLIC-not-a-real-signature"
+    },
+    "empty": {
+      "value": "enc:v1:k917iUjpuk2KrXBa.jtR5lmOcoYQBYcq_aemIWQ.",
+      "plaintext": ""
+    },
+    "jwt": {
+      "value": "enc:v1:fBMd8w6Eqrwed5jn.XnWkvm7LeO4XUpkYtOw8ew.LLeA075NpQilCFpdjRA76g4v9YvUL-avmsE3MkiXqZeJjzEEBpwIjyVUFAWkXAA3uydrgZtY3sCVOduyQro5VdRyLr8xAq1PTPAsI9_NCI0",
+      "plaintext": "e30.eyJ1c2VyX2lkIjoiUFVCTElDLWp3dC1ub3QtcHJvZmlsZSJ9.PUBLIC-not-a-real-signature"
+    },
+    "profile": {
+      "value": "enc:v1:kaAu7cnZ1zUHi_tf.NzKk9_rXRhYskaoz4YRgkQ.nLfA1Fs-CRF9yNHnqRyGoCFfklLeDBA9zmGC_gKOP4jaEKzkzW9w9JyhGLYji_OGbFMLeBQhp6N1TdbPIwwVdj5z2Qo9IOzPt9yCO3D3djEEvwMMSOKW3J---Cb3p8Cvd9fJt7NLD9rtubpGsfvpphB9F5forinHR7pGCjRm5MU1xQ5G-RrQ",
+      "plaintext": "{\"user_id\":\"PUBLIC-desktop-profile\",\"email\":\"desktop@example.invalid\",\"name\":\"PUBLIC desktop name\",\"private\":\"PUBLIC profile metadata\"}"
+    },
+    "provider": {
+      "value": "enc:v1:r4ikP1Wqc5QsFEH3.oI3A5AM3U9TkmDRyGjlSFg.81VinKeqhSfZ0mjQHX4O",
+      "plaintext": "public-provider"
+    }
+  },
+  "wrong_secret": "PUBLIC TEST ONLY: wrong desktop secret"
+}

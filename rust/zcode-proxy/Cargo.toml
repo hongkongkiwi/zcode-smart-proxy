@@ -11,21 +11,28 @@ path = "src/main.rs"
 [dependencies]
 aes-gcm = "0.10"
 base64 = "0.22"
+pbkdf2 = "0.12.2"
 axum = "0.7"
 futures-util = "0.3"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+chrono = "0.4"
+iana-time-zone = "0.1"
+reqwest = { version = "0.12", features = ["json", "stream", "socks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 bcrypt = "0.15"
 rand = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 tower = { version = "0.5", features = ["util"] }
 zcode-core = { path = "../zcode-core" }
 zeroize = "1"
+webauthn-rs-core = "0.6.2"
+serde_cbor_2 = "0.13"
+url = "2"
 
 [dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa"] }
 bcrypt = "0.15"
 rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -430,11 +430,10 @@ async fn authenticated_settings_exposes_only_supported_public_settings() {
 #[tokio::test]
 async fn login_rejects_cross_origin_without_password_check() {
     let f = Fixture::new(false).await;
-    f.state
-        .settings
-        .lock()
-        .unwrap()
-        .insert("admin_password_hash".into(), "$2y$10$fakehashforcsrf".into());
+    f.state.settings.lock().unwrap().insert(
+        "admin_password_hash".into(),
+        "$2y$10$fakehashforcsrf".into(),
+    );
     let req = Request::builder()
         .method("POST")
         .uri("/api/login")
@@ -454,11 +453,10 @@ async fn login_rejects_cross_origin_without_password_check() {
 #[tokio::test]
 async fn login_same_origin_and_no_origin_accepted_shape() {
     let f = Fixture::new(false).await;
-    f.state
-        .settings
-        .lock()
-        .unwrap()
-        .insert("admin_password_hash".into(), "$2y$10$fakehashforcsrf".into());
+    f.state.settings.lock().unwrap().insert(
+        "admin_password_hash".into(),
+        "$2y$10$fakehashforcsrf".into(),
+    );
     let app = zcode_proxy::build_router(f.state.clone());
     // Same origin: passes the CSRF gate (fails on password, which is fake).
     let req = Request::builder()
@@ -488,11 +486,10 @@ async fn login_same_origin_and_no_origin_accepted_shape() {
 #[tokio::test]
 async fn login_lockout_after_repeated_failures() {
     let f = Fixture::new(false).await;
-    f.state
-        .settings
-        .lock()
-        .unwrap()
-        .insert("admin_password_hash".into(), "$2y$10$fakehashforcsrf".into());
+    f.state.settings.lock().unwrap().insert(
+        "admin_password_hash".into(),
+        "$2y$10$fakehashforcsrf".into(),
+    );
     let mut guard = f.state.login_guard.lock().unwrap();
     // Simulate threshold failures through the guard directly (the full
     // bcrypt+lockout flow is slower; the guard is the logic under test).
@@ -504,9 +501,16 @@ async fn login_lockout_after_repeated_failures() {
         guard.check("evil-client", now + 1) > 0,
         "client must be locked out after {LOCKOUT_THRESHOLD_TEST} failures"
     );
-    assert_eq!(guard.check("other-client", now), 0, "other clients unaffected");
+    assert_eq!(
+        guard.check("other-client", now),
+        0,
+        "other clients unaffected"
+    );
     // Window lapse clears the lockout.
-    assert_eq!(guard.check("evil-client", now + LOCKOUT_WINDOW_SECS_TEST + 1), 0);
+    assert_eq!(
+        guard.check("evil-client", now + LOCKOUT_WINDOW_SECS_TEST + 1),
+        0
+    );
     drop(guard);
 }
 

@@ -17,6 +17,44 @@ use crate::state::{AppState, Creds, UsageRecord};
 pub const CHANNEL_FREE: &str = "free";
 pub const CHANNEL_PAID: &str = "paid";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Default data-plane catalog; the console reads the same list.
+pub const MODEL_IDS: &[&str] = &[
+    "GLM-5.3",
+    "GLM-5.3-Flash",
+    "GLM-5.2",
+    "GLM-5.1",
+    "GLM-5",
+    "GLM-5-Turbo",
+    "GLM-5V-Turbo",
+    "GLM-5.1-Highspeed",
+];
+
+/// Preset table copied from the Go server (tls_fingerprint.go); the console
+/// dropdown depends on the exact ids, labels and groups.
+pub const TLS_FINGERPRINT_PRESETS: &[(&str, &str, &str)] = &[
+    ("off", "关闭（Go 默认指纹）", "基础"),
+    ("randomized", "随机化指纹", "基础"),
+    ("chrome", "Chrome 浏览器（自动最新）", "浏览器"),
+    ("chrome_100", "Chrome 100", "浏览器"),
+    ("chrome_83", "Chrome 83（旧版 Electron 常见）", "浏览器"),
+    ("firefox", "Firefox 浏览器（120）", "浏览器"),
+    ("safari", "Safari 浏览器（16.0）", "浏览器"),
+    ("edge", "Edge 浏览器（85）", "浏览器"),
+    ("qq", "QQ 浏览器（11.1）", "浏览器"),
+    ("q360", "360 浏览器（7.5）", "浏览器"),
+    ("bun", "Bun.js（BoringSSL）", "运行时与工具"),
+    ("node", "Node.js（OpenSSL）", "运行时与工具"),
+    ("deno", "Deno（rustls）", "运行时与工具"),
+    ("curl", "curl（OpenSSL）", "运行时与工具"),
+    ("python", "Python requests（OpenSSL）", "运行时与工具"),
+    ("okhttp", "OkHttp 3（Android）", "运行时与工具"),
+    ("golang", "Go 标准库（crypto/tls）", "运行时与工具"),
+    ("ios", "iOS Safari（14）", "移动端"),
+    ("android", "Android OkHttp（11）", "移动端"),
+    ("custom", "自定义 JA3 指纹", "自定义"),
+];
+
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
 
 /// Terminal responses carry a token charge; streaming responses defer accounting to body completion.
@@ -24,6 +62,7 @@ enum Attempt {
     /// Response is fully written (success or terminal error).
     Written(Response, i64),
     Streaming(reqwest::Response),
+    Exhausted,
     /// Try the next candidate; the account cools for `cool_secs` (0 = none).
     /// `soft` marks content-quality failures (challenge/captcha/risk) that
     /// balanced mode cascades to the same account's paid channel.
@@ -61,7 +100,7 @@ fn auth_headers(creds: &Creds, channel: &str) -> Vec<(String, String)> {
     h
 }
 
-fn error_response(status: StatusCode, err_type: &str, msg: &str) -> Response {
+pub(crate) fn error_response(status: StatusCode, err_type: &str, msg: &str) -> Response {
     (
         status,
         axum::Json(json!({
@@ -125,10 +164,7 @@ fn classify_to_attempt(
             cool_secs: 30,
             soft: false,
         },
-        FailureClass::Exhausted => Attempt::NextAccount {
-            cool_secs: 0,
-            soft: false,
-        },
+        FailureClass::Exhausted => Attempt::Exhausted,
         FailureClass::UpstreamError => {
             let msg = truncate(&body, 300);
             Attempt::Written(
@@ -176,17 +212,7 @@ pub async fn handle_count_tokens(
 /// feature; the skeleton ships the fixed list).
 pub async fn handle_models() -> Response {
     let now = now_secs();
-    let models = [
-        "GLM-5.3",
-        "GLM-5.3-Flash",
-        "GLM-5.2",
-        "GLM-5.1",
-        "GLM-5",
-        "GLM-5-Turbo",
-        "GLM-5V-Turbo",
-        "GLM-5.1-Highspeed",
-    ];
-    let data: Vec<serde_json::Value> = models
+    let data: Vec<serde_json::Value> = MODEL_IDS
         .iter()
         .map(|m| {
             json!({
@@ -213,13 +239,31 @@ pub fn now_secs() -> i64 {
 /// go through the envelope path (L3 ordering); stream responses pass bytes
 /// through untouched.
 async fn attempt_upstream(
-    client: &reqwest::Client,
+    state: &AppState,
+    account_group: &str,
     url: &str,
     headers: Vec<(String, String)>,
     payload: &[u8],
     want_stream: bool,
     shape: Shape,
 ) -> Attempt {
+    let client =
+        crate::egress::client_builder_for_group(state, account_group).and_then(|builder| {
+            builder
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| crate::store::StoreError::Vault)
+        });
+    let Ok(client) = client else {
+        return Attempt::Written(
+            error_response(
+                StatusCode::BAD_GATEWAY,
+                "api_error",
+                "cannot initialize upstream client",
+            ),
+            0,
+        );
+    };
     let resp = match client
         .post(url)
         .headers(headers_vec_to_map(headers))
@@ -346,10 +390,7 @@ async fn attempt_upstream(
             cool_secs: 60,
             soft: true,
         },
-        OkBodyClass::ExhaustedEnvelope => Attempt::NextAccount {
-            cool_secs: 0,
-            soft: false,
-        },
+        OkBodyClass::ExhaustedEnvelope => Attempt::Exhausted,
         OkBodyClass::ErrorEnvelope => Attempt::Written(
             (status, [("content-type", "application/json")], body).into_response(),
             0,
@@ -361,7 +402,34 @@ use axum::Json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-fn terminal_response(
+pub(crate) fn named_key_gate(
+    named: &Option<crate::state::NamedKey>,
+    model: &str,
+) -> Option<Response> {
+    if let Some(k) = named {
+        if k.quota_total > 0 && k.quota_used >= k.quota_total {
+            return Some(error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                &format!(
+                    "gateway key token quota exhausted ({}/{}): {}",
+                    k.quota_used, k.quota_total, k.name
+                ),
+            ));
+        }
+        let model = model.to_lowercase();
+        if !zcode_core::model_allowed(&k.models, &model) {
+            return Some(error_response(
+                StatusCode::FORBIDDEN,
+                "api_error",
+                &format!("model not allowed for this gateway key: {model}"),
+            ));
+        }
+    }
+    None
+}
+
+pub(crate) fn terminal_response(
     state: &Arc<AppState>,
     account_id: i64,
     gateway_key_id: i64,
@@ -387,12 +455,93 @@ fn terminal_response(
     response
 }
 
-/// POST /v1/messages (+ shape aliases): the free-first fallback ladder.
+fn persist_exhausted(
+    state: &AppState,
+    id: i64,
+    expected: &Creds,
+) -> Result<bool, crate::store::StoreError> {
+    use rusqlite::OptionalExtension;
+
+    let db = state.db.lock().unwrap();
+    let mut accounts = state.accounts.lock().unwrap();
+    let creds = state.creds.lock().unwrap();
+    let Some(account) = accounts.iter_mut().find(|a| a.id == id) else {
+        return Ok(false);
+    };
+    if !account.enabled
+        || account.status == "disabled"
+        || account.zcode_jwt != expected.zcode_jwt
+        || account.api_key != expected.api_key
+        || !creds.get(&id).is_some_and(|current| {
+            current.zcode_jwt == expected.zcode_jwt && current.api_key == expected.api_key
+        })
+    {
+        return Ok(false);
+    }
+    let stored: Option<(bool, String, String, String)> = db
+        .query_row(
+            "SELECT enabled,status,zcode_jwt,api_key FROM accounts WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((enabled, status, jwt, key)) = stored else {
+        return Ok(false);
+    };
+    if !enabled
+        || status == "disabled"
+        || state.vault.decrypt(&jwt)? != expected.zcode_jwt
+        || state.vault.decrypt(&key)? != expected.api_key
+    {
+        return Ok(false);
+    }
+    // Publish only after the durable write, without replacing the quota snapshot.
+    let updated = db.execute(
+        "UPDATE accounts SET status='exhausted',cooling_until=0,last_error='quota exhausted' WHERE id=?1",
+        [id],
+    )?;
+    if updated == 0 {
+        return Ok(false);
+    }
+    account.status = "exhausted".into();
+    account.cooling_until = 0;
+    Ok(true)
+}
+
+/// POST /v1/messages: the free-first fallback ladder.
 pub async fn handle_messages(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    extension: axum::Extension<crate::auth::ResolvedKey>,
+    axum::Extension(key): axum::Extension<crate::auth::ResolvedKey>,
     headers: axum::http::HeaderMap,
     body: String,
+) -> Response {
+    handle_shaped_messages(state, key, headers, body, Shape::Plain).await
+}
+
+pub(crate) async fn handle_highspeed_messages(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::Extension(key): axum::Extension<crate::auth::ResolvedKey>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response {
+    handle_shaped_messages(state, key, headers, body, Shape::Highspeed).await
+}
+
+pub(crate) async fn handle_offpeak_messages(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::Extension(key): axum::Extension<crate::auth::ResolvedKey>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response {
+    handle_shaped_messages(state, key, headers, body, Shape::OffPeak).await
+}
+
+async fn handle_shaped_messages(
+    state: Arc<AppState>,
+    key: crate::auth::ResolvedKey,
+    headers: axum::http::HeaderMap,
+    body: String,
+    shape: Shape,
 ) -> Response {
     if state.setting("gateway_paused").as_deref() == Some("1") {
         return error_response(
@@ -401,7 +550,7 @@ pub async fn handle_messages(
             "gateway is globally paused (panic stop); resume it from the admin panel",
         );
     }
-    let named = extension.named.clone();
+    let named = key.named;
     let parsed: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => {
@@ -429,49 +578,26 @@ pub async fn handle_messages(
         let normalized = zcode_core::normalize_model_name(m, &config_models);
         obj.insert("model".into(), Value::String(normalized));
     }
-    // Named-key per-request gates: quota + model whitelist.
-    if let Some(k) = &named {
-        if k.quota_total > 0 && k.quota_used >= k.quota_total {
-            return error_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limit_error",
-                &format!(
-                    "gateway key token quota exhausted ({}/{}): {}",
-                    k.quota_used, k.quota_total, k.name
-                ),
-            );
-        }
-        let model = obj
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_lowercase();
-        if !zcode_core::model_allowed(&k.models, &model) {
-            return error_response(
-                StatusCode::FORBIDDEN,
-                "api_error",
-                &format!("model not allowed for this gateway key: {model}"),
-            );
-        }
+    if let Some(response) = named_key_gate(
+        &named,
+        obj.get("model").and_then(Value::as_str).unwrap_or(""),
+    ) {
+        return response;
     }
     let want_stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    let shape = if headers
-        .get("x-zcode-rs-shape")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .contains("highspeed")
-    {
-        Shape::Highspeed
-    } else if headers
-        .get("x-zcode-rs-shape")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .contains("off-peak")
-    {
-        Shape::OffPeak
-    } else {
-        Shape::Plain
-    };
+    if shape == Shape::Highspeed && crate::highspeed::enabled(&state) {
+        if let Some(response) = crate::highspeed::relay(
+            &state,
+            &headers,
+            &obj,
+            want_stream,
+            named.as_ref().map_or(0, |k| k.id),
+        )
+        .await
+        {
+            return response;
+        }
+    }
     let session_key = zcode_core::session_key(
         obj.get("metadata")
             .and_then(|m| m.get("user_id"))
@@ -480,7 +606,6 @@ pub async fn handle_messages(
     );
     let payload = serde_json::to_vec(&Value::Object(obj)).unwrap_or_default();
 
-    let client = reqwest::Client::new();
     let mode = state
         .setting("paid_fallback_mode")
         .unwrap_or_else(|| "free_first".into());
@@ -534,7 +659,8 @@ pub async fn handle_messages(
 
             let (url, _) = (endpoint_for(&state, phase), ());
             let out = attempt_upstream(
-                &client,
+                &state,
+                &acct.account_group,
                 &url,
                 auth_headers(creds, phase),
                 &payload,
@@ -559,6 +685,26 @@ pub async fn handle_messages(
                         acct.id,
                         named.as_ref().map(|k| k.id).unwrap_or(0),
                     );
+                }
+                Attempt::Exhausted => {
+                    if phase == CHANNEL_FREE {
+                        match persist_exhausted(&state, acct.id, creds) {
+                            Ok(true) => {
+                                if let Some(manager) = state.auto_reset() {
+                                    manager.enqueue(acct.id, crate::autoreset::ResetTrigger::Relay);
+                                }
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                eprintln!("exhausted status persistence failed: {error}");
+                                return error_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "api_error",
+                                    "storage operation failed",
+                                );
+                            }
+                        }
+                    }
                 }
                 Attempt::NextAccount { cool_secs, soft } => {
                     if cool_secs > 0 {
@@ -587,7 +733,8 @@ pub async fn handle_messages(
                             if let Some(creds) = creds_map.get(&acct.id) {
                                 let url = endpoint_for(&state, CHANNEL_PAID);
                                 let out = attempt_upstream(
-                                    &client,
+                                    &state,
+                                    &acct.account_group,
                                     &url,
                                     auth_headers(creds, CHANNEL_PAID),
                                     &payload,
@@ -623,7 +770,7 @@ pub async fn handle_messages(
                                             named.as_ref().map(|k| k.id).unwrap_or(0),
                                         )
                                     }
-                                    Attempt::NextAccount { .. } => {}
+                                    Attempt::NextAccount { .. } | Attempt::Exhausted => {}
                                 }
                             }
                         }
