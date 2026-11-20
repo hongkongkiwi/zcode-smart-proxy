@@ -100,7 +100,7 @@ fn auth_headers(creds: &Creds, channel: &str) -> Vec<(String, String)> {
     h
 }
 
-fn error_response(status: StatusCode, err_type: &str, msg: &str) -> Response {
+pub(crate) fn error_response(status: StatusCode, err_type: &str, msg: &str) -> Response {
     (
         status,
         axum::Json(json!({
@@ -508,12 +508,40 @@ fn persist_exhausted(
     Ok(true)
 }
 
-/// POST /v1/messages (+ shape aliases): the free-first fallback ladder.
+/// POST /v1/messages: the free-first fallback ladder.
 pub async fn handle_messages(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    extension: axum::Extension<crate::auth::ResolvedKey>,
+    axum::Extension(key): axum::Extension<crate::auth::ResolvedKey>,
     headers: axum::http::HeaderMap,
     body: String,
+) -> Response {
+    handle_shaped_messages(state, key, headers, body, Shape::Plain).await
+}
+
+pub(crate) async fn handle_highspeed_messages(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::Extension(key): axum::Extension<crate::auth::ResolvedKey>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response {
+    handle_shaped_messages(state, key, headers, body, Shape::Highspeed).await
+}
+
+pub(crate) async fn handle_offpeak_messages(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::Extension(key): axum::Extension<crate::auth::ResolvedKey>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response {
+    handle_shaped_messages(state, key, headers, body, Shape::OffPeak).await
+}
+
+async fn handle_shaped_messages(
+    state: Arc<AppState>,
+    key: crate::auth::ResolvedKey,
+    headers: axum::http::HeaderMap,
+    body: String,
+    shape: Shape,
 ) -> Response {
     if state.setting("gateway_paused").as_deref() == Some("1") {
         return error_response(
@@ -522,7 +550,7 @@ pub async fn handle_messages(
             "gateway is globally paused (panic stop); resume it from the admin panel",
         );
     }
-    let named = extension.named.clone();
+    let named = key.named;
     let parsed: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => {
@@ -557,23 +585,19 @@ pub async fn handle_messages(
         return response;
     }
     let want_stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    let shape = if headers
-        .get("x-zcode-rs-shape")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .contains("highspeed")
-    {
-        Shape::Highspeed
-    } else if headers
-        .get("x-zcode-rs-shape")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .contains("off-peak")
-    {
-        Shape::OffPeak
-    } else {
-        Shape::Plain
-    };
+    if shape == Shape::Highspeed && crate::highspeed::enabled(&state) {
+        if let Some(response) = crate::highspeed::relay(
+            &state,
+            &headers,
+            &obj,
+            want_stream,
+            named.as_ref().map_or(0, |k| k.id),
+        )
+        .await
+        {
+            return response;
+        }
+    }
     let session_key = zcode_core::session_key(
         obj.get("metadata")
             .and_then(|m| m.get("user_id"))

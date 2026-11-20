@@ -21,6 +21,7 @@ pub mod engine;
 pub mod gateway_admin;
 pub mod go_compat;
 pub mod go_import;
+pub mod highspeed;
 pub mod identity;
 pub mod install_sequence;
 mod local_switchback;
@@ -75,11 +76,11 @@ fn data_plane(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/highspeed/anthropic/v1/messages",
-            post(engine::handle_messages),
+            post(engine::handle_highspeed_messages),
         )
         .route(
             "/api/v1/off-peak/anthropic/v1/messages",
-            post(engine::handle_messages),
+            post(engine::handle_offpeak_messages),
         )
         .route(
             "/api/v1/zcode-plan/anthropic/v1/messages",
@@ -92,49 +93,11 @@ fn data_plane(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn handle_highspeed_status(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-) -> axum::response::Response {
-    use axum::{http::StatusCode, response::IntoResponse, Json};
-    use serde_json::json;
-
-    let enabled = matches!(
-        state.setting("highspeed_lane_enabled").as_deref(),
-        Some("1" | "true")
-    );
-    let accounts: Vec<_> = {
-        let accounts = state.accounts.lock().unwrap();
-        accounts
-            .iter()
-            .filter(|account| account.provider == "zai")
-            .map(|account| {
-                (
-                    account.id,
-                    account.email.clone(),
-                    account.enabled,
-                    account.status.clone(),
-                )
-            })
-            .collect()
-    };
-    let accounts: Vec<_> = accounts
-        .into_iter()
-        .map(|(id, email, enabled, status)| {
-            json!({"id": id, "email": email, "enabled": enabled, "status": status})
-        })
-        .collect();
-    (
-        StatusCode::OK,
-        Json(json!({"enabled": enabled, "accounts": accounts})),
-    )
-        .into_response()
-}
-
 /// Admin API behind the session gate (login mounted open below).
 fn admin_api(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/accounts", get(admin::handle_accounts))
-        .route("/api/highspeed/status", get(handle_highspeed_status))
+        .route("/api/highspeed/status", get(highspeed::status))
         .route(
             "/api/offpeak/availability",
             get(offpeak::handle_availability),

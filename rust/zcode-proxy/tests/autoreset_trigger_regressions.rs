@@ -546,14 +546,17 @@ async fn until<F: Fn() -> bool>(label: &str, condition: F) {
 }
 
 async fn relay(state: &Arc<AppState>, shape: Option<&str>) -> (StatusCode, Value) {
-    let mut builder = Request::builder()
+    let path = match shape {
+        None => "/v1/messages",
+        Some("off-peak") => "/api/v1/off-peak/anthropic/v1/messages",
+        Some("highspeed") => "/api/v1/highspeed/anthropic/v1/messages",
+        Some(other) => panic!("unexpected relay shape: {other}"),
+    };
+    let builder = Request::builder()
         .method("POST")
-        .uri("/v1/messages")
+        .uri(path)
         .header("x-api-key", "root")
         .header("content-type", "application/json");
-    if let Some(shape) = shape {
-        builder = builder.header("x-zcode-rs-shape", shape);
-    }
     let payload = json!({"model":"GLM-5.3","stream":false,
         "messages":[{"role":"user","content":"trigger wiring fixture"}]});
     let request = builder.body(Body::from(payload.to_string())).unwrap();

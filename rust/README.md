@@ -30,7 +30,7 @@ production Go database.
   including encrypted credentials, paid-fallback preservation, wrong-key
   rejection, and unchanged source data. This is not a runtime migration.
 
-The current workspace run passes 651 tests across 80 suites, and strict Clippy
+The current workspace run passes 669 tests across 81 suites, and strict Clippy
 passes. This includes encrypted storage, startup key handling, and OpenAI
 streaming regressions. Stream failures record one durable error status, malformed
 frames cannot finish successfully, and generated heartbeats do not postpone the
@@ -202,9 +202,11 @@ fixtures. These checks do not establish Go feature parity.
    same ticket, a bare 429 cools the account and switches. 3104 and 3106 are
    generic failures here, matching Go's queue rather than the plain lane's
    passthrough comment. Gateway keys share the plain lane's quota and model
-   gates. Highspeed status reports whether
-   the lane is enabled and lists the z.ai accounts. It carries no card fields,
-   because those come from the draw flow, and this route never draws a card.
+   gates. The highspeed lane draws cards only when explicitly enabled and only
+   for highspeed models on the dedicated route. It reuses valid cards and does
+   not replay a request after accepting an upstream event stream. Status reads
+   cached card details without drawing. The lane has loopback coverage; live
+   card draws have not been tested.
    Switch-back and restore-local write credentials into a configured local
    ZCode directory, encrypted with the same home-derived secret the desktop
    client uses. Both are off unless a directory is configured. They trust that

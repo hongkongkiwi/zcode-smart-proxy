@@ -139,14 +139,14 @@ pub(crate) async fn collect_bounded(
     Ok(bytes)
 }
 
-struct Recorder {
-    state: Arc<AppState>,
-    record: Option<UsageRecord>,
-    sniff: UsageSniffer,
+pub(crate) struct Recorder {
+    pub(crate) state: Arc<AppState>,
+    pub(crate) record: Option<UsageRecord>,
+    pub(crate) sniff: UsageSniffer,
 }
 
 impl Recorder {
-    fn finish(&mut self, status: u16) -> rusqlite::Result<()> {
+    pub(crate) fn finish(&mut self, status: u16) -> rusqlite::Result<()> {
         if let Some(mut record) = self.record.take() {
             self.sniff.flush();
             record.status = status;
