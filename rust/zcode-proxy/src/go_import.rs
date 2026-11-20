@@ -193,6 +193,7 @@ fn validate_go_schema(db: &Connection) -> Result<(), ImportError> {
         ("settings", "key,value,updated_at"),
         ("gateway_keys", "id,name,key_hash,enabled,models,rpm_limit,rate_5h,rate_1d,rate_7d,quota_total,quota_used"),
         ("proxy_nodes", "id,name,type,host,port,username,password,is_default,group_name,enabled,check_status,check_latency,check_ip,check_msg,check_at,created_at,updated_at"),
+        ("claim_records", "id,created_at,account_id,email,task_type,plan_id,plan_name,success,code,message,next_at,used_at"),
     ] {
         let kind: String = db.query_row("SELECT type FROM sqlite_schema WHERE name=?1", [table], |r| r.get(0))?;
         if kind != "table" { return Err(ImportError); }
@@ -311,8 +312,25 @@ fn project(
             [key, &value],
         )?;
     }
+    let mut stmt = source.prepare("SELECT id,created_at,account_id,email,task_type,plan_id,plan_name,success,code,message,next_at,used_at FROM claim_records WHERE task_type COLLATE BINARY = 'reset'")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let used_at: i64 = r.get(11)?;
+        if !(0..=253402300799).contains(&used_at) {
+            return Err(ImportError);
+        }
+        tx.execute("INSERT INTO claim_records(id,created_at,account_id,email,task_type,plan_id,plan_name,success,code,message,next_at,used_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", params![
+            r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, boolean(r,7)?, r.get::<_, i64>(8)?, r.get::<_, String>(9)?, r.get::<_, i64>(10)?, used_at
+        ])?;
+    }
     // Deleted IDs must not be reused, including history IDs whose projection is deferred.
-    for table in ["accounts", "gateway_keys", "usage_records", "proxy_nodes"] {
+    for table in [
+        "accounts",
+        "gateway_keys",
+        "usage_records",
+        "proxy_nodes",
+        "claim_records",
+    ] {
         let seq: Option<i64> = source
             .query_row(
                 "SELECT seq FROM sqlite_sequence WHERE name=?1",
@@ -320,6 +338,17 @@ fn project(
                 |r| r.get(0),
             )
             .optional()?;
+        if seq.is_some_and(|seq| seq < 0) {
+            return Err(ImportError);
+        }
+        let seq = if table == "claim_records" {
+            // Archive-only rows may have IDs raised by UPDATE without advancing sqlite_sequence.
+            let max_id: Option<i64> =
+                source.query_row("SELECT max(id) FROM claim_records", [], |r| r.get(0))?;
+            seq.into_iter().chain(max_id.filter(|id| *id > 0)).max()
+        } else {
+            seq
+        };
         if let Some(seq) = seq {
             let current: Option<i64> = tx
                 .query_row(
@@ -328,9 +357,6 @@ fn project(
                     |r| r.get(0),
                 )
                 .optional()?;
-            if seq < 0 {
-                return Err(ImportError);
-            }
             match current {
                 Some(current) if current > seq => return Err(ImportError),
                 Some(_) => {
