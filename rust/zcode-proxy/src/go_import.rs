@@ -191,6 +191,7 @@ fn validate_go_schema(db: &Connection) -> Result<(), ImportError> {
     for (table, columns) in [
         ("accounts", "id,user_id,email,display_name,provider,auth_type,enabled,status,cooling_until,paid_cooling_until,paid_fallback,zcode_jwt,api_key,account_group,remaining,priority,access_token,refresh_token,user_info,device_mid,creds_raw,remark"),
         ("settings", "key,value,updated_at"),
+        ("usage_records", "id,created_at,account_id,email,model,prompt_tokens,completion_tokens,total_tokens,cache_read_tokens,cache_creation_tokens,stream,status_code,duration_ms,ttft_ms,gateway_key_id,key_name,channel"),
         ("gateway_keys", "id,name,key_hash,enabled,models,rpm_limit,rate_5h,rate_1d,rate_7d,quota_total,quota_used"),
         ("proxy_nodes", "id,name,type,host,port,username,password,is_default,group_name,enabled,check_status,check_latency,check_ip,check_msg,check_at,created_at,updated_at"),
         ("claim_records", "id,created_at,account_id,email,task_type,plan_id,plan_name,success,code,message,next_at,used_at"),
@@ -202,6 +203,31 @@ fn validate_go_schema(db: &Connection) -> Result<(), ImportError> {
         let mut stmt = db.prepare(&format!("PRAGMA table_info({table})"))?;
         let names = stmt.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
         if columns.split(',').any(|c| !names.iter().any(|n| n == c)) { return Err(ImportError); }
+    }
+    let mut stmt = db.prepare("PRAGMA table_info(usage_records)")?;
+    let columns = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (name, kind) in &columns {
+        let expected = match name.as_str() {
+            "created_at" | "email" | "model" | "key_name" | "channel" => "TEXT",
+            "id"
+            | "account_id"
+            | "prompt_tokens"
+            | "completion_tokens"
+            | "total_tokens"
+            | "cache_read_tokens"
+            | "cache_creation_tokens"
+            | "stream"
+            | "status_code"
+            | "duration_ms"
+            | "ttft_ms"
+            | "gateway_key_id" => "INTEGER",
+            _ => continue,
+        };
+        if !kind.eq_ignore_ascii_case(expected) {
+            return Err(ImportError);
+        }
     }
     Ok(())
 }
@@ -340,6 +366,13 @@ fn project(
             r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)?, r.get::<_, i64>(10)?, r.get::<_, i64>(11)?, r.get::<_, i64>(12)?
         ])?;
     }
+    let mut stmt = source.prepare("SELECT id,created_at,account_id,email,model,prompt_tokens,completion_tokens,total_tokens,cache_read_tokens,cache_creation_tokens,stream,status_code,duration_ms,ttft_ms,gateway_key_id,key_name,channel FROM usage_records")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        tx.execute("INSERT INTO go_usage_history(id,created_at,account_id,email,model,prompt_tokens,completion_tokens,total_tokens,cache_read_tokens,cache_creation_tokens,stream,status_code,duration_ms,ttft_ms,gateway_key_id,key_name,channel) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![
+            r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?, r.get::<_, i64>(8)?, r.get::<_, i64>(9)?, boolean(r,10)?, r.get::<_, i64>(11)?, r.get::<_, i64>(12)?, r.get::<_, i64>(13)?, r.get::<_, i64>(14)?, r.get::<_, String>(15)?, r.get::<_, String>(16)?
+        ])?;
+    }
     // Deleted IDs must not be reused, including history IDs whose projection is deferred.
     for table in [
         "accounts",
@@ -360,7 +393,10 @@ fn project(
         if seq.is_some_and(|seq| seq < 0) {
             return Err(ImportError);
         }
-        let seq = if matches!(table, "claim_records" | "claim_plans" | "plan_run_records") {
+        let seq = if matches!(
+            table,
+            "usage_records" | "claim_records" | "claim_plans" | "plan_run_records"
+        ) {
             // IDs raised by UPDATE do not advance sqlite_sequence.
             let max_id: Option<i64> =
                 source.query_row(&format!("SELECT max(id) FROM {table}"), [], |r| r.get(0))?;
@@ -378,6 +414,11 @@ fn project(
         } else {
             seq
         };
+        // A table whose ID space is exhausted can never allocate another row;
+        // SQLite returns SQLITE_FULL on every future insert.
+        if seq == Some(i64::MAX) {
+            return Err(ImportError);
+        }
         if let Some(seq) = seq {
             let current: Option<i64> = tx
                 .query_row(

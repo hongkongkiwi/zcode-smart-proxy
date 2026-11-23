@@ -209,6 +209,14 @@ fn try_migrate(conn: &Connection) -> Result<(), StoreError> {
             used_at INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_claim_records_account ON claim_records(account_id);
+        CREATE TABLE IF NOT EXISTS go_usage_history (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT, account_id INTEGER, email TEXT, model TEXT,
+            prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
+            cache_read_tokens INTEGER, cache_creation_tokens INTEGER, stream INTEGER,
+            status_code INTEGER, duration_ms INTEGER, ttft_ms INTEGER,
+            gateway_key_id INTEGER, key_name TEXT, channel TEXT
+        );
         CREATE TABLE IF NOT EXISTS usage_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at INTEGER NOT NULL,
@@ -1311,6 +1319,54 @@ pub fn record_usage(
     };
     tx.commit()?;
     Ok(balance)
+}
+
+pub(crate) fn usage_history(
+    conn: &Connection,
+    limit: i64,
+) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT id,created_at,account_id,status,gateway_key_id,quota_charge
+         FROM usage_records ORDER BY id DESC LIMIT ?1",
+    )?;
+    let mut records = stmt
+        .query_map([limit], |r| {
+            let status: i64 = r.get(3)?;
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?, "created_at": r.get::<_, i64>(1)?,
+                "account_id": r.get::<_, i64>(2)?, "status": status, "status_code": status,
+                "gateway_key_id": r.get::<_, i64>(4)?, "quota_charge": r.get::<_, i64>(5)?
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let remaining = limit - records.len() as i64;
+    if remaining > 0 {
+        let mut stmt = conn.prepare(
+            "SELECT id,created_at,account_id,email,model,prompt_tokens,completion_tokens,
+             total_tokens,cache_read_tokens,cache_creation_tokens,stream,status_code,
+             duration_ms,ttft_ms,gateway_key_id,key_name,channel
+             FROM go_usage_history ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([remaining], |r| {
+            let stream: i64 = r.get(10)?;
+            if stream != 0 && stream != 1 {
+                return Err(rusqlite::Error::IntegralValueOutOfRange(10, stream));
+            }
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?, "created_at": r.get::<_, String>(1)?,
+                "account_id": r.get::<_, i64>(2)?, "email": r.get::<_, String>(3)?,
+                "model": r.get::<_, String>(4)?, "prompt_tokens": r.get::<_, i64>(5)?,
+                "completion_tokens": r.get::<_, i64>(6)?, "total_tokens": r.get::<_, i64>(7)?,
+                "cache_read_tokens": r.get::<_, i64>(8)?, "cache_creation_tokens": r.get::<_, i64>(9)?,
+                "stream": stream == 1, "status_code": r.get::<_, i64>(11)?,
+                "duration_ms": r.get::<_, i64>(12)?, "ttft_ms": r.get::<_, i64>(13)?,
+                "gateway_key_id": r.get::<_, i64>(14)?, "key_name": r.get::<_, String>(15)?,
+                "channel": r.get::<_, String>(16)?
+            }))
+        })?;
+        records.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+    }
+    Ok(records)
 }
 
 pub fn list_usage(conn: &Connection, limit: i64) -> Vec<(i64, i64, u16, i64, i64)> {
