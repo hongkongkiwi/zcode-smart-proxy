@@ -592,19 +592,19 @@ pub async fn handle_put_settings(
 
 pub async fn handle_usage(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let rows = {
-        let db = state.db.lock().unwrap();
-        store::list_usage(&db, 50)
-    };
-    let list: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|(ts, acct, st, gk, charge)| {
-            json!({"created_at": ts, "account_id": acct, "status": st,
-                   "gateway_key_id": gk, "quota_charge": charge})
-        })
-        .collect();
-    (StatusCode::OK, Json(json!({"records": list}))).into_response()
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(50)
+        .min(1000);
+    let db = state.db.lock().unwrap();
+    match store::usage_history(&db, limit) {
+        Ok(records) => (StatusCode::OK, Json(json!({"records": records}))).into_response(),
+        Err(_) => storage_error(),
+    }
 }
 
 /// Shared stats payload for /api/stats and the dashboard's usage_7d.
