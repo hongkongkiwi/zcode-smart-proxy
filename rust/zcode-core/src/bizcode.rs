@@ -88,7 +88,8 @@ pub fn is_risk_blocked(text: &str) -> bool {
 
 /// Captcha-rejection family: the keywords plus biz code 3007 (zcode-plan
 /// security-check rejection; same family as 3012, never the credential
-/// branch).
+/// branch). The 4.0.0 client replaces the 3007 literal with the marker
+/// `coding_plan_security_verification_required`, so both are matched.
 pub fn is_captcha_error(text: &str) -> bool {
     let low = text.to_lowercase();
     for m in [
@@ -101,6 +102,7 @@ pub fn is_captcha_error(text: &str) -> bool {
         "请完成验证",
         "安全验证",
         "安全校验",
+        "coding_plan_security_verification_required",
     ] {
         if low.contains(m) {
             return true;
@@ -326,6 +328,10 @@ mod tests {
         assert!(is_captcha_error("请完成验证"));
         assert!(is_captcha_error(r#"{"code":3007}"#));
         assert!(!is_captcha_error(r#"{"code":30071}"#));
+        // 4.0.0 client marker replaces the 3007 literal upstream.
+        assert!(is_captcha_error(
+            r#"{"error":{"type":"api_error","message":"coding_plan_security_verification_required"}}"#
+        ));
     }
 
     #[test]
